@@ -2,6 +2,7 @@ title: paver
 description: PAVED docs for the AI agent era
 url: ""
 baseurl: ""
+permalink: pretty
 
 markdown: kramdown
 kramdown:
