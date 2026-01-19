@@ -42,3 +42,54 @@ Implement paver in Rust using:
 **Node.js**: Large runtime overhead (~100MB), slow startup time. npm ecosystem has security concerns for CLI tools.
 
 **Shell scripts**: Maximum portability but limited functionality. Hard to maintain complex validation logic, poor error handling, inconsistent behavior across shells.
+
+## Verification
+
+Prerequisites: Install the Rust toolchain via [rustup](https://rustup.rs/).
+
+Verify the Rust implementation is working correctly:
+
+```bash
+# Build paver
+cargo build --release
+
+# Run the test suite
+cargo test
+
+# Check the binary works
+./target/release/paver --version
+```
+
+Expected: All tests pass, binary outputs version information.
+
+## Examples
+
+### Building Paver
+
+```bash
+# Debug build for development
+cargo build
+
+# Release build for distribution
+cargo build --release
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+cargo test
+
+# Run tests with output
+cargo test -- --nocapture
+```
+
+### Cross-Compilation
+
+```bash
+# Add target for Linux
+rustup target add x86_64-unknown-linux-musl
+
+# Build for Linux
+cargo build --release --target x86_64-unknown-linux-musl
+```

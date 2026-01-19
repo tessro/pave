@@ -14,3 +14,9 @@
 
 ## Alternatives Considered
 <!-- What else did we consider and why not? -->
+
+## Verification
+<!-- How to verify the decision was correctly implemented? -->
+
+## Examples
+<!-- Concrete examples of how the decision is applied -->
