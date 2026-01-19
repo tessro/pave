@@ -118,8 +118,7 @@ header::after {
 }
 
 .site-logo {
-  width: 2.5rem;
-  height: 2.5rem;
+  font-size: 2rem;
 }
 
 .site-tagline {
@@ -348,8 +347,8 @@ tr:hover {
 }
 
 .hero-logo {
-  width: 8rem;
-  height: 8rem;
+  font-size: 6rem;
+  display: block;
   margin-bottom: 1rem;
   animation: float 3s ease-in-out infinite;
 }
@@ -554,8 +553,7 @@ footer a:hover {
   }
 
   .hero-logo {
-    width: 5rem;
-    height: 5rem;
+    font-size: 4rem;
   }
 
   .docs-layout {
