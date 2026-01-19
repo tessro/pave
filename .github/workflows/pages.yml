@@ -24,6 +24,30 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      - name: Copy paver docs to site
+        run: |
+          # Copy paver-managed docs to the site directory
+          cp -r docs site/paved-docs
+
+          # Process each markdown file
+          for file in $(find site/paved-docs -name "*.md"); do
+            # Convert .md links to Jekyll-friendly format (remove .md extension)
+            # Converts: [text](./path/file.md) to [text](./path/file)
+            sed -i 's/\.md)/)/g' "$file"
+
+            # Add front matter if not present
+            if ! head -1 "$file" | grep -q "^---"; then
+              # Extract title from first H1 heading
+              title=$(grep -m1 "^# " "$file" | sed 's/^# //')
+              if [ -z "$title" ]; then
+                title=$(basename "$file" .md)
+              fi
+              # Create temp file with front matter + original content
+              { echo "---"; echo "layout: doc"; echo "title: \"$title\""; echo "---"; echo ""; cat "$file"; } > "$file.tmp"
+              mv "$file.tmp" "$file"
+            fi
+          done
+
       - name: Build with Jekyll
         uses: actions/jekyll-build-pages@v1
         with:

@@ -499,6 +499,32 @@ footer a:hover {
   color: var(--ctp-mauve);
 }
 
+.docs-sidebar nav .nav-section {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ctp-mauve);
+  margin: 1.5rem 0 0.5rem;
+  padding: 0 1rem;
+}
+
+.docs-sidebar nav .nav-section:first-child {
+  margin-top: 0;
+}
+
+.docs-sidebar nav .nav-subsection {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ctp-overlay1);
+  margin: 1rem 0 0.25rem;
+  padding: 0 1rem 0 1.5rem;
+}
+
 /* PAVED section styles */
 .paved-letter {
   display: inline-block;

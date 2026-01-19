@@ -26,10 +26,27 @@
       <div class="docs-layout">
         <aside class="docs-sidebar">
           <nav>
-            <a href="{{ '/docs/' | relative_url }}" {% if page.url == '/docs/' %}class="active"{% endif %}>Overview</a>
-            <a href="{{ '/docs/manifesto/' | relative_url }}" {% if page.url contains 'manifesto' %}class="active"{% endif %}>Manifesto</a>
+            <span class="nav-section">User Guide</span>
+            <a href="{{ '/docs/' | relative_url }}" {% if page.url == '/docs/' or page.url == '/docs/index.html' %}class="active"{% endif %}>Overview</a>
+            <a href="{{ '/docs/manifesto/' | relative_url }}" {% if page.url contains '/docs/manifesto' %}class="active"{% endif %}>Manifesto</a>
             <a href="{{ '/docs/getting-started/' | relative_url }}" {% if page.url contains 'getting-started' %}class="active"{% endif %}>Getting Started</a>
-            <a href="{{ '/docs/commands/' | relative_url }}" {% if page.url contains 'commands' %}class="active"{% endif %}>Commands</a>
+            <a href="{{ '/docs/commands/' | relative_url }}" {% if page.url contains '/docs/commands' %}class="active"{% endif %}>Commands</a>
+
+            <span class="nav-section">PAVED Docs</span>
+            <a href="{{ '/paved-docs/' | relative_url }}" {% if page.url == '/paved-docs/' or page.url == '/paved-docs/index.html' %}class="active"{% endif %}>Index</a>
+            <a href="{{ '/paved-docs/manifesto/' | relative_url }}" {% if page.url contains '/paved-docs/manifesto' %}class="active"{% endif %}>PAVED Framework</a>
+
+            <span class="nav-subsection">Components</span>
+            <a href="{{ '/paved-docs/components/paver-cli/' | relative_url }}" {% if page.url contains 'paver-cli' %}class="active"{% endif %}>Paver CLI</a>
+            <a href="{{ '/paved-docs/components/validation-engine/' | relative_url }}" {% if page.url contains 'validation-engine' %}class="active"{% endif %}>Validation Engine</a>
+
+            <span class="nav-subsection">Runbooks</span>
+            <a href="{{ '/paved-docs/runbooks/add-command/' | relative_url }}" {% if page.url contains 'add-command' %}class="active"{% endif %}>Add Command</a>
+            <a href="{{ '/paved-docs/runbooks/release/' | relative_url }}" {% if page.url contains 'runbooks/release' %}class="active"{% endif %}>Release</a>
+
+            <span class="nav-subsection">ADRs</span>
+            <a href="{{ '/paved-docs/adrs/001-use-paved-framework/' | relative_url }}" {% if page.url contains '001-use-paved-framework' %}class="active"{% endif %}>001: PAVED Framework</a>
+            <a href="{{ '/paved-docs/adrs/002-use-rust/' | relative_url }}" {% if page.url contains '002-use-rust' %}class="active"{% endif %}>002: Use Rust</a>
           </nav>
         </aside>
         <article>
