@@ -98,7 +98,7 @@ Confirm documentation is correct:
 ```
 
 ```bash
-cargo test 2>&1 | grep "test result: ok" | head -1
+cargo test
 ```
 
 ## Escalation

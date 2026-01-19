@@ -204,7 +204,7 @@ cargo build --release
 ```
 
 ```bash
-cargo test verification 2>&1 | grep "test result: ok"
+cargo test verification
 ```
 
 ## Gotchas
