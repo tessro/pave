@@ -24,10 +24,12 @@ All pave documentation must:
 2. Pass `pave verify` with no failures
 3. Follow the appropriate template for its document type (ADR, component, runbook)
 4. Include all required sections as configured in `.pave.toml`
+5. Maintain at least 90% code coverage (files mapped to documentation)
 
 Enforcement mechanisms:
 
 - **CI**: GitHub Actions workflow runs `pave check --strict` on every PR and push to main
+- **CI**: Coverage threshold of 90% enforced via `pave coverage --threshold 90`
 - **Development**: Developers should run `pave check` before committing
 - **Documentation gaps**: Treated as bugs, not tech debt
 
@@ -109,6 +111,9 @@ jobs:
 
       - name: Validate documentation
         run: ./target/release/pave check --strict
+
+      - name: Check coverage threshold
+        run: ./target/release/pave coverage --threshold 90
 ```
 
 ### Local Development Workflow

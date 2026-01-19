@@ -38,3 +38,6 @@ jobs:
 
       - name: Check impacted docs
         run: ./target/release/pave changed --strict
+
+      - name: Check coverage threshold
+        run: ./target/release/pave coverage --threshold 90
