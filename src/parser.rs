@@ -19,6 +19,17 @@ pub struct ParsedDoc {
     pub line_count: usize,
 }
 
+/// A fenced code block extracted from a section.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodeBlock {
+    /// Language tag (e.g., "bash", "rust"), if present.
+    pub language: Option<String>,
+    /// The code content inside the block (without the fence markers).
+    pub content: String,
+    /// Line number where the code block starts (1-indexed, points to opening fence).
+    pub start_line: usize,
+}
+
 /// A section of a PAVED document (H2 heading and its content).
 #[derive(Debug)]
 pub struct Section {
@@ -32,6 +43,8 @@ pub struct Section {
     pub has_code_blocks: bool,
     /// Whether the section contains executable commands.
     pub has_commands: bool,
+    /// Extracted code blocks from this section.
+    pub code_blocks: Vec<CodeBlock>,
 }
 
 impl ParsedDoc {
@@ -117,6 +130,8 @@ impl ParsedDoc {
 
             let has_code_blocks = Self::detect_code_blocks(content_lines);
             let has_commands = Self::detect_commands(content_lines);
+            // Base line for content is start_idx + 2 (1-indexed: line after heading)
+            let code_blocks = Self::extract_code_blocks(content_lines, start_idx + 2);
 
             sections.push(Section {
                 name: name.clone(),
@@ -124,6 +139,7 @@ impl ParsedDoc {
                 content,
                 has_code_blocks,
                 has_commands,
+                code_blocks,
             });
         }
 
@@ -154,6 +170,95 @@ impl ParsedDoc {
             }
         }
         false
+    }
+
+    /// Extract code blocks from section content.
+    ///
+    /// Parses fenced code blocks (``` markers) and extracts:
+    /// - Language tag (if present after opening ```)
+    /// - Content between the fences
+    /// - Line number of the opening fence
+    ///
+    /// The `base_line` parameter is the 1-indexed line number of the first line in `lines`.
+    fn extract_code_blocks(lines: &[&str], base_line: usize) -> Vec<CodeBlock> {
+        let mut code_blocks = Vec::new();
+        let mut in_code_block = false;
+        let mut current_block_start: usize = 0;
+        let mut current_language: Option<String> = None;
+        let mut current_content: Vec<&str> = Vec::new();
+        let mut opening_fence_len: usize = 0;
+
+        for (idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+
+            if !in_code_block {
+                // Check for opening fence (at least 3 backticks)
+                if let Some(fence_content) = Self::parse_opening_fence(trimmed) {
+                    in_code_block = true;
+                    opening_fence_len = fence_content.0;
+                    current_block_start = base_line + idx;
+                    current_language = fence_content.1;
+                    current_content.clear();
+                }
+            } else {
+                // Check for closing fence (at least as many backticks as opening, nothing after)
+                if Self::is_closing_fence(trimmed, opening_fence_len) {
+                    code_blocks.push(CodeBlock {
+                        language: current_language.take(),
+                        content: current_content.join("\n"),
+                        start_line: current_block_start,
+                    });
+                    in_code_block = false;
+                    current_content.clear();
+                } else {
+                    current_content.push(line);
+                }
+            }
+        }
+
+        // Handle unclosed code block at end of section (treat as if closed)
+        if in_code_block && !current_content.is_empty() {
+            code_blocks.push(CodeBlock {
+                language: current_language,
+                content: current_content.join("\n"),
+                start_line: current_block_start,
+            });
+        }
+
+        code_blocks
+    }
+
+    /// Parse an opening fence line, returning (fence_length, optional_language).
+    /// Returns None if not an opening fence.
+    fn parse_opening_fence(trimmed: &str) -> Option<(usize, Option<String>)> {
+        if !trimmed.starts_with("```") {
+            return None;
+        }
+
+        // Count backticks
+        let fence_len = trimmed.chars().take_while(|&c| c == '`').count();
+        if fence_len < 3 {
+            return None;
+        }
+
+        // Extract language tag (first word after the backticks, if any)
+        let language = trimmed[fence_len..]
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string());
+
+        Some((fence_len, language))
+    }
+
+    /// Check if a line is a closing fence (at least `min_len` backticks, nothing else).
+    fn is_closing_fence(trimmed: &str, min_len: usize) -> bool {
+        if !trimmed.starts_with("```") {
+            return false;
+        }
+
+        let fence_len = trimmed.chars().take_while(|&c| c == '`').count();
+        // Closing fence must have at least as many backticks and nothing after
+        fence_len >= min_len && trimmed.len() == fence_len
     }
 }
 
@@ -341,5 +446,177 @@ Second line.
         assert!(!section.content.contains("## Purpose"));
         assert!(section.content.contains("This is the content."));
         assert!(section.content.contains("Second line."));
+    }
+
+    #[test]
+    fn extract_single_code_block_with_language() {
+        let content = r#"# Test
+
+## Verification
+Run the test:
+```bash
+cargo test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert_eq!(block.language, Some("bash".to_string()));
+        assert_eq!(block.content, "cargo test");
+        // Line 1: # Test, Line 2: blank, Line 3: ## Verification, Line 4: Run the test:, Line 5: ```bash
+        assert_eq!(block.start_line, 5);
+    }
+
+    #[test]
+    fn extract_multiple_code_blocks() {
+        let content = r#"# Test
+
+## Steps
+First command:
+```bash
+make build
+```
+Second command:
+```rust
+fn main() {}
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Steps").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 2);
+
+        let first = &section.code_blocks[0];
+        assert_eq!(first.language, Some("bash".to_string()));
+        assert_eq!(first.content, "make build");
+
+        let second = &section.code_blocks[1];
+        assert_eq!(second.language, Some("rust".to_string()));
+        assert_eq!(second.content, "fn main() {}");
+    }
+
+    #[test]
+    fn extract_code_block_without_language() {
+        let content = r#"# Test
+
+## Example
+```
+plain text here
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Example").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert_eq!(block.language, None);
+        assert_eq!(block.content, "plain text here");
+    }
+
+    #[test]
+    fn extract_multiline_code_block() {
+        let content = r#"# Test
+
+## Script
+```bash
+#!/bin/bash
+echo "Line 1"
+echo "Line 2"
+exit 0
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Script").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert_eq!(block.language, Some("bash".to_string()));
+        assert!(block.content.contains("#!/bin/bash"));
+        assert!(block.content.contains("echo \"Line 1\""));
+        assert!(block.content.contains("echo \"Line 2\""));
+        assert!(block.content.contains("exit 0"));
+        // Verify it's actually multiline
+        assert_eq!(block.content.lines().count(), 4);
+    }
+
+    #[test]
+    fn nested_backticks_handled_correctly() {
+        // Use 4 backticks to wrap code that contains 3 backticks
+        let content = r#"# Test
+
+## Docs
+````markdown
+Here is some code:
+```rust
+fn test() {}
+```
+````
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Docs").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert_eq!(block.language, Some("markdown".to_string()));
+        // The inner backticks should be preserved as content
+        assert!(block.content.contains("```rust"));
+        assert!(block.content.contains("fn test() {}"));
+        assert!(block.content.contains("```"));
+    }
+
+    #[test]
+    fn has_code_blocks_remains_accurate() {
+        let content = r#"# Test
+
+## With Code
+```bash
+test
+```
+
+## Without Code
+Just plain text.
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+
+        let with_code = doc.get_section("With Code").unwrap();
+        assert!(with_code.has_code_blocks);
+        assert_eq!(with_code.code_blocks.len(), 1);
+
+        let without_code = doc.get_section("Without Code").unwrap();
+        assert!(!without_code.has_code_blocks);
+        assert!(without_code.code_blocks.is_empty());
+    }
+
+    #[test]
+    fn code_block_line_numbers_are_correct() {
+        let content = r#"# Title
+
+## Section
+Line of text.
+Another line.
+```bash
+command here
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Section").unwrap();
+
+        // Line 1: # Title
+        // Line 2: blank
+        // Line 3: ## Section
+        // Line 4: Line of text.
+        // Line 5: Another line.
+        // Line 6: ```bash
+        assert_eq!(section.code_blocks.len(), 1);
+        assert_eq!(section.code_blocks[0].start_line, 6);
     }
 }
