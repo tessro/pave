@@ -206,10 +206,8 @@ fn check_file(path: &Path, config: &PaverConfig, results: &mut CheckResults) -> 
 
     // Skip validation of index.md files - they are navigation documents
     // that don't need Verification and Examples sections
-    if let Some(file_name) = path.file_name() {
-        if file_name == "index.md" {
-            return Ok(());
-        }
+    if path.file_name().is_some_and(|f| f == "index.md") {
+        return Ok(());
     }
 
     // Skip template files - they are scaffolds, not actual documentation
