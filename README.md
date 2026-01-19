@@ -27,6 +27,9 @@ paver new component my-service
 # Validate your docs
 paver check
 
+# Run verification commands
+paver verify
+
 # Generate index
 paver index
 ```
@@ -38,6 +41,8 @@ paver index
 | `paver init` | Initialize paver in your project |
 | `paver new <type> <name>` | Scaffold a new document |
 | `paver check` | Validate documents against rules |
+| `paver verify` | Run verification commands from docs |
+| `paver changed` | Show docs impacted by code changes |
 | `paver index` | Generate documentation index |
 | `paver prompt <type>` | Generate AI agent prompts |
 | `paver config` | Manage configuration |

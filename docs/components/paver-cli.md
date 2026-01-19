@@ -16,6 +16,7 @@ Paver is a command-line tool for creating, validating, and managing PAVED docume
 | `paver init` | Initialize project with `.paver.toml` config and docs directory |
 | `paver new <type> <name>` | Scaffold a new document from template |
 | `paver check [path]` | Validate documentation against PAVED rules |
+| `paver verify [path]` | Run verification commands from documentation |
 | `paver index` | Generate documentation index |
 | `paver prompt <type>` | Generate AI prompts for documentation tasks |
 | `paver changed` | Show docs impacted by code changes |
@@ -84,6 +85,16 @@ paver changed [--base <ref>] [--format <format>] [--strict]
 - `--base`: Git ref to compare against (default: `origin/main`, `origin/master`, or `HEAD~1`)
 - `--format`: Output format (`text` or `json`)
 - `--strict`: Fail if impacted docs weren't updated
+
+**paver verify**
+```bash
+paver verify [paths...] [--format <format>] [--timeout <seconds>] [--keep-going] [--report <path>]
+```
+- `paths`: Files or directories to verify (default: docs root)
+- `--format`: Output format (`text`, `json`, or `github`)
+- `--timeout`: Timeout per command in seconds (default: 30)
+- `--keep-going`: Continue running after first failure
+- `--report`: Write JSON report to file
 
 **paver hooks**
 ```bash
@@ -210,6 +221,24 @@ paver changed --format json
 paver changed --strict
 ```
 
+### Run verification commands
+```bash
+# Run all verification commands from all docs
+paver verify
+
+# Verify a specific document
+paver verify docs/components/auth-service.md
+
+# Continue running after failures
+paver verify --keep-going
+
+# Write JSON report for CI
+paver verify --format json --report verify-results.json
+
+# GitHub Actions annotations
+paver verify --format github
+```
+
 ## Gotchas
 
 - **Config not found**: Paver looks for `.paver.toml` in the current directory and parent directories. Run `paver init` to create one, or use `paver config path` to see where it's looking.
@@ -233,3 +262,4 @@ paver changed --strict
 - `src/cli.rs`
 - `src/main.rs`
 - `src/commands/*.rs`
+- `src/verification.rs`
