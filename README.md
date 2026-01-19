@@ -1,6 +1,10 @@
-# paver
+<p align="center">
+  <img src="site/assets/images/paver-icon.svg" alt="paver logo" width="128" height="128">
+</p>
 
-A CLI tool for creating, validating, and managing documentation optimized for human+agent pairs.
+<h1 align="center">paver</h1>
+
+<p align="center">A CLI tool for creating, validating, and managing documentation optimized for human+agent pairs.</p>
 
 ## What is PAVED?
 
