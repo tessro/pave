@@ -22,6 +22,7 @@
 
 - [Runbook: Adding a New CLI Command to Paver](./runbooks/add-command.md)
 - [Runbook: Release Paver](./runbooks/release.md)
+- [Runbook: Update Paver Documentation](./runbooks/update-docs.md)
 
 ## Architecture Decisions
 
