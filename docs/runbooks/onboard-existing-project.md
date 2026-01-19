@@ -9,7 +9,7 @@ Use this runbook when helping a user adopt paver in an existing codebase. This a
 
 ## Preconditions
 
-- paver CLI installed and accessible
+- paver built (`cargo build --release` produces `./target/release/paver`)
 - Access to the target project's repository
 - Understanding of the project's documentation structure
 - Read access to existing documentation files
@@ -21,7 +21,7 @@ Use this runbook when helping a user adopt paver in an existing codebase. This a
 Scan the project to understand its documentation landscape:
 
 ```bash
-paver adopt
+./target/release/paver adopt
 ```
 
 Review the output for:
@@ -35,7 +35,7 @@ Review the output for:
 Get configuration recommendations:
 
 ```bash
-paver adopt --suggest-config
+./target/release/paver adopt --suggest-config
 ```
 
 Review the suggested settings and note any adjustments needed for the project's specific needs.
@@ -45,7 +45,7 @@ Review the suggested settings and note any adjustments needed for the project's 
 Dry-run the init to see what would be created:
 
 ```bash
-paver adopt --dry-run
+./target/release/paver adopt --dry-run
 ```
 
 Confirm the proposed changes make sense before proceeding.
@@ -55,7 +55,7 @@ Confirm the proposed changes make sense before proceeding.
 Create the configuration file:
 
 ```bash
-paver init
+./target/release/paver init
 ```
 
 ### 5. Configure gradual mode
@@ -93,11 +93,11 @@ For each high-priority document:
 
 2. Create a new PAVED document:
    ```bash
-   paver new component <name>
+   ./target/release/paver new component <name>
    # or
-   paver new runbook <name>
+   ./target/release/paver new runbook <name>
    # or
-   paver new adr <name>
+   ./target/release/paver new adr <name>
    ```
 
 3. Migrate content from the legacy document into PAVED sections
@@ -111,7 +111,7 @@ For each high-priority document:
 Check that converted docs pass validation:
 
 ```bash
-paver check docs/components/<name>.md
+./target/release/paver check docs/components/<name>.md
 ```
 
 In gradual mode, errors appear as warnings. Address them before disabling gradual mode.
@@ -125,13 +125,13 @@ Help the user add paver to their CI pipeline. Provide the appropriate configurat
 Set up pre-commit hooks:
 
 ```bash
-paver hooks install
+./target/release/paver hooks install
 ```
 
 For verification in hooks:
 
 ```bash
-paver hooks install --verify
+./target/release/paver hooks install --verify
 ```
 
 ### 11. Document progress tracking
@@ -139,8 +139,8 @@ paver hooks install --verify
 Show the user how to monitor adoption progress:
 
 ```bash
-paver check
-paver coverage
+./target/release/paver check
+./target/release/paver coverage
 ```
 
 ### 12. Plan gradual mode exit
@@ -158,7 +158,7 @@ If adoption causes problems:
 
 1. Remove the git hooks:
    ```bash
-   paver hooks uninstall
+   ./target/release/paver hooks uninstall
    ```
 
 2. Remove CI integration (revert workflow file changes)
@@ -175,13 +175,13 @@ The original documentation remains intact throughout the process.
 Confirm paver is correctly configured:
 
 ```bash
-paver config list
+./target/release/paver config list
 ```
 
 Confirm validation runs:
 
 ```bash
-paver check
+./target/release/paver check
 ```
 
 Confirm hooks are installed:
@@ -207,19 +207,19 @@ If issues arise during onboarding:
 
 ```bash
 # Assess existing docs
-paver adopt
+./target/release/paver adopt
 
 # Initialize with defaults
-paver init
+./target/release/paver init
 
 # Enable gradual mode
 # Edit .paver.toml: gradual = true
 
 # Convert README to component
-paver new component my-python-lib
+./target/release/paver new component my-python-lib
 
 # Validate
-paver check
+./target/release/paver check
 ```
 
 ### Onboarding a monorepo
@@ -227,15 +227,15 @@ paver check
 For monorepos, configure the docs root appropriately:
 
 ```bash
-paver init --docs-root packages/my-service/docs
+./target/release/paver init --docs-root packages/my-service/docs
 ```
 
 Or set up multiple paver configurations:
 
 ```bash
 # In each package directory
-cd packages/service-a && paver init
-cd packages/service-b && paver init
+cd packages/service-a && ./target/release/paver init
+cd packages/service-b && ./target/release/paver init
 ```
 
 ### Handling mixed documentation styles
