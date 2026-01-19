@@ -28,6 +28,8 @@ pub struct CodeBlock {
     pub content: String,
     /// Line number where the code block starts (1-indexed, points to opening fence).
     pub start_line: usize,
+    /// Whether this code block contains executable shell commands.
+    pub is_executable: bool,
 }
 
 /// A section of a PAVED document (H2 heading and its content).
@@ -45,6 +47,19 @@ pub struct Section {
     pub has_commands: bool,
     /// Extracted code blocks from this section.
     pub code_blocks: Vec<CodeBlock>,
+}
+
+impl Section {
+    /// Returns only the code blocks that are marked as executable.
+    ///
+    /// Executable blocks are those with shell language tags (bash, sh, shell, zsh),
+    /// content with shell prompts ($ or >), or preceded by a `<!-- paver:run -->` marker.
+    pub fn executable_commands(&self) -> Vec<&CodeBlock> {
+        self.code_blocks
+            .iter()
+            .filter(|b| b.is_executable)
+            .collect()
+    }
 }
 
 impl ParsedDoc {
@@ -178,6 +193,7 @@ impl ParsedDoc {
     /// - Language tag (if present after opening ```)
     /// - Content between the fences
     /// - Line number of the opening fence
+    /// - Whether the block is executable (shell language, prompts, or paver:run marker)
     ///
     /// The `base_line` parameter is the 1-indexed line number of the first line in `lines`.
     fn extract_code_blocks(lines: &[&str], base_line: usize) -> Vec<CodeBlock> {
@@ -187,13 +203,18 @@ impl ParsedDoc {
         let mut current_language: Option<String> = None;
         let mut current_content: Vec<&str> = Vec::new();
         let mut opening_fence_len: usize = 0;
+        let mut has_run_marker = false;
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
 
             if !in_code_block {
+                // Check for paver:run marker before the code block
+                if Self::has_paver_run_marker(trimmed) {
+                    has_run_marker = true;
+                }
                 // Check for opening fence (at least 3 backticks)
-                if let Some(fence_content) = Self::parse_opening_fence(trimmed) {
+                else if let Some(fence_content) = Self::parse_opening_fence(trimmed) {
                     in_code_block = true;
                     opening_fence_len = fence_content.0;
                     current_block_start = base_line + idx;
@@ -203,13 +224,18 @@ impl ParsedDoc {
             } else {
                 // Check for closing fence (at least as many backticks as opening, nothing after)
                 if Self::is_closing_fence(trimmed, opening_fence_len) {
+                    let content = current_content.join("\n");
+                    let is_executable =
+                        Self::is_block_executable(&current_language, &content, has_run_marker);
                     code_blocks.push(CodeBlock {
                         language: current_language.take(),
-                        content: current_content.join("\n"),
+                        content,
                         start_line: current_block_start,
+                        is_executable,
                     });
                     in_code_block = false;
                     current_content.clear();
+                    has_run_marker = false;
                 } else {
                     current_content.push(line);
                 }
@@ -218,10 +244,14 @@ impl ParsedDoc {
 
         // Handle unclosed code block at end of section (treat as if closed)
         if in_code_block && !current_content.is_empty() {
+            let content = current_content.join("\n");
+            let is_executable =
+                Self::is_block_executable(&current_language, &content, has_run_marker);
             code_blocks.push(CodeBlock {
                 language: current_language,
-                content: current_content.join("\n"),
+                content,
                 start_line: current_block_start,
+                is_executable,
             });
         }
 
@@ -259,6 +289,39 @@ impl ParsedDoc {
         let fence_len = trimmed.chars().take_while(|&c| c == '`').count();
         // Closing fence must have at least as many backticks and nothing after
         fence_len >= min_len && trimmed.len() == fence_len
+    }
+
+    /// Determine if a code block is executable based on language, content, and markers.
+    ///
+    /// A code block is considered executable if:
+    /// 1. Language tag is a shell language: `bash`, `sh`, `shell`, `zsh`
+    /// 2. Content contains lines starting with `$ ` or `> ` (shell prompts)
+    /// 3. The block is preceded by a `<!-- paver:run -->` HTML comment marker
+    fn is_block_executable(language: &Option<String>, content: &str, has_run_marker: bool) -> bool {
+        // Check explicit marker first
+        if has_run_marker {
+            return true;
+        }
+
+        // Check shell language tags
+        if let Some(lang) = language {
+            let lang_lower = lang.to_lowercase();
+            if matches!(lang_lower.as_str(), "bash" | "sh" | "shell" | "zsh") {
+                return true;
+            }
+        }
+
+        // Check for shell prompt prefixes in content
+        content.lines().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with("$ ") || trimmed.starts_with("> ")
+        })
+    }
+
+    /// Check if a line contains the paver:run marker.
+    fn has_paver_run_marker(line: &str) -> bool {
+        let trimmed = line.trim();
+        trimmed.contains("<!-- paver:run -->") || trimmed.contains("<!--paver:run-->")
     }
 }
 
@@ -618,5 +681,267 @@ command here
         // Line 6: ```bash
         assert_eq!(section.code_blocks.len(), 1);
         assert_eq!(section.code_blocks[0].start_line, 6);
+    }
+
+    #[test]
+    fn bash_language_tag_is_executable() {
+        let content = r#"# Test
+
+## Verification
+```bash
+cargo test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        assert!(section.code_blocks[0].is_executable);
+    }
+
+    #[test]
+    fn shell_language_tags_are_executable() {
+        let content = r#"# Test
+
+## Commands
+```sh
+echo "sh"
+```
+```shell
+echo "shell"
+```
+```zsh
+echo "zsh"
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Commands").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 3);
+        for block in &section.code_blocks {
+            assert!(
+                block.is_executable,
+                "Block with language {:?} should be executable",
+                block.language
+            );
+        }
+    }
+
+    #[test]
+    fn json_language_tag_is_not_executable() {
+        let content = r#"# Test
+
+## Config
+```json
+{"key": "value"}
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Config").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        assert!(!section.code_blocks[0].is_executable);
+    }
+
+    #[test]
+    fn dollar_prefix_makes_block_executable() {
+        let content = r#"# Test
+
+## Steps
+```
+$ make build
+$ make test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Steps").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        assert!(section.code_blocks[0].is_executable);
+    }
+
+    #[test]
+    fn angle_bracket_prefix_makes_block_executable() {
+        let content = r#"# Test
+
+## REPL
+```
+> console.log("hello")
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("REPL").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        assert!(section.code_blocks[0].is_executable);
+    }
+
+    #[test]
+    fn paver_run_marker_makes_block_executable() {
+        let content = r#"# Test
+
+## Example
+<!-- paver:run -->
+```python
+print("hello")
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Example").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        assert!(section.code_blocks[0].is_executable);
+        // Language should still be python
+        assert_eq!(section.code_blocks[0].language, Some("python".to_string()));
+    }
+
+    #[test]
+    fn paver_run_marker_without_spaces_works() {
+        let content = r#"# Test
+
+## Example
+<!--paver:run-->
+```ruby
+puts "hello"
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Example").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        assert!(section.code_blocks[0].is_executable);
+    }
+
+    #[test]
+    fn mixed_executable_and_non_executable_blocks() {
+        let content = r#"# Test
+
+## Verification
+Run the test:
+```bash
+cargo test
+```
+
+Expected output:
+```json
+{"status": "ok"}
+```
+
+Configuration:
+```yaml
+key: value
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 3);
+
+        // bash block is executable
+        assert!(section.code_blocks[0].is_executable);
+        assert_eq!(section.code_blocks[0].language, Some("bash".to_string()));
+
+        // json block is not executable
+        assert!(!section.code_blocks[1].is_executable);
+        assert_eq!(section.code_blocks[1].language, Some("json".to_string()));
+
+        // yaml block is not executable
+        assert!(!section.code_blocks[2].is_executable);
+        assert_eq!(section.code_blocks[2].language, Some("yaml".to_string()));
+    }
+
+    #[test]
+    fn executable_commands_method_returns_only_executable_blocks() {
+        let content = r#"# Test
+
+## Steps
+```bash
+make build
+```
+```json
+{"result": "ok"}
+```
+```sh
+make test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Steps").unwrap();
+
+        let executable = section.executable_commands();
+        assert_eq!(executable.len(), 2);
+        assert_eq!(executable[0].language, Some("bash".to_string()));
+        assert_eq!(executable[1].language, Some("sh".to_string()));
+    }
+
+    #[test]
+    fn executable_commands_empty_when_no_executable_blocks() {
+        let content = r#"# Test
+
+## Config
+```json
+{"key": "value"}
+```
+```yaml
+key: value
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Config").unwrap();
+
+        let executable = section.executable_commands();
+        assert!(executable.is_empty());
+    }
+
+    #[test]
+    fn non_shell_with_dollar_prefix_is_executable() {
+        // A code block without language but with $ prefix should be executable
+        let content = r#"# Test
+
+## Commands
+```
+$ npm install
+$ npm test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Commands").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        assert!(section.code_blocks[0].is_executable);
+        assert_eq!(section.code_blocks[0].language, None);
+    }
+
+    #[test]
+    fn paver_run_marker_only_applies_to_next_block() {
+        let content = r#"# Test
+
+## Steps
+<!-- paver:run -->
+```python
+print("executable")
+```
+```python
+print("not executable")
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Steps").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 2);
+        assert!(section.code_blocks[0].is_executable);
+        assert!(!section.code_blocks[1].is_executable);
     }
 }
