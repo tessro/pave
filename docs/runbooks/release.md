@@ -56,6 +56,11 @@ When releasing a new version of paver. This includes new features, bug fixes, or
    git push origin --tags
    ```
 
+9. Monitor the CI release workflow:
+   - Go to Actions tab in the GitHub repository
+   - Watch the "Release" workflow triggered by the tag
+   - CI will: run tests, build binaries for all platforms, create GitHub Release, publish to crates.io
+
 ## Rollback
 
 If a release needs to be reverted:
@@ -89,6 +94,15 @@ git show v0.x.x --oneline --no-patch
 
 # Confirm the release binary version
 ./target/release/paver --version
+
+# Verify CI workflow completed
+gh run list --workflow=release.yml --limit=1
+
+# Check GitHub Release was created
+gh release view v0.x.x
+
+# Verify crates.io publication
+cargo search paver
 ```
 
 ## Examples
