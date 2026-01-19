@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::OutputFormat;
 use crate::config::{CONFIG_FILENAME, LintSection, PaverConfig};
-use crate::parser::ParsedDoc;
+use crate::parser::{CodeBlockTracker, ParsedDoc};
 
 /// Arguments for the `paver lint` command.
 pub struct LintArgs {
@@ -397,16 +397,13 @@ fn check_broken_internal_links(
 ) -> Result<()> {
     let link_re = Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
 
-    let mut in_code_block = false;
+    let mut tracker = CodeBlockTracker::new();
 
     for (line_num, line) in lines.iter().enumerate() {
-        // Track code blocks
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
+        // Track code blocks (handles language tags and nested fences)
+        tracker.process_line(line);
 
-        if in_code_block {
+        if tracker.in_code_block() {
             continue;
         }
 
@@ -455,12 +452,18 @@ fn check_broken_internal_links(
 }
 
 /// Check for dead anchors (links to sections that don't exist).
-fn check_dead_anchors(path: &Path, content: &str, lines: &[&str], results: &mut LintResults) {
-    // Build set of valid anchors from headings
+fn check_dead_anchors(path: &Path, _content: &str, lines: &[&str], results: &mut LintResults) {
+    // Build set of valid anchors from headings (skipping code blocks)
     let heading_re = Regex::new(r"^#{1,6}\s+(.+)$").unwrap();
     let mut valid_anchors: HashSet<String> = HashSet::new();
+    let mut tracker = CodeBlockTracker::new();
 
     for line in lines {
+        tracker.process_line(line);
+        if tracker.in_code_block() {
+            continue;
+        }
+
         if let Some(cap) = heading_re.captures(line) {
             let heading = &cap[1];
             // Convert heading to anchor format (lowercase, spaces to hyphens)
@@ -474,10 +477,16 @@ fn check_dead_anchors(path: &Path, content: &str, lines: &[&str], results: &mut 
         }
     }
 
-    // Find all anchor links
+    // Find all anchor links (also skipping code blocks)
     let anchor_link_re = Regex::new(r"\[([^\]]*)\]\(#([^)]+)\)").unwrap();
+    let mut tracker = CodeBlockTracker::new();
 
     for (line_num, line) in lines.iter().enumerate() {
+        tracker.process_line(line);
+        if tracker.in_code_block() {
+            continue;
+        }
+
         for cap in anchor_link_re.captures_iter(line) {
             let anchor = &cap[2];
 
@@ -502,8 +511,14 @@ fn check_dead_anchors(path: &Path, content: &str, lines: &[&str], results: &mut 
 
     // Also check anchors in file links (e.g., file.md#section)
     let file_anchor_re = Regex::new(r"\[([^\]]*)\]\(([^)#]+)#([^)]+)\)").unwrap();
+    let mut tracker = CodeBlockTracker::new();
 
     for (line_num, line) in lines.iter().enumerate() {
+        tracker.process_line(line);
+        if tracker.in_code_block() {
+            continue;
+        }
+
         for cap in file_anchor_re.captures_iter(line) {
             let target_file = &cap[2];
             let anchor = &cap[3];
@@ -523,8 +538,14 @@ fn check_dead_anchors(path: &Path, content: &str, lines: &[&str], results: &mut 
             {
                 let target_lines: Vec<&str> = target_content.lines().collect();
                 let mut target_anchors: HashSet<String> = HashSet::new();
+                let mut target_tracker = CodeBlockTracker::new();
 
                 for tline in &target_lines {
+                    target_tracker.process_line(tline);
+                    if target_tracker.in_code_block() {
+                        continue;
+                    }
+
                     if let Some(cap) = heading_re.captures(tline) {
                         let heading = &cap[1];
                         let anchor_id = heading
@@ -559,10 +580,17 @@ fn check_dead_anchors(path: &Path, content: &str, lines: &[&str], results: &mut 
         }
     }
 
-    // Also handle HTML-style anchors
+    // Also handle HTML-style anchors (skipping code blocks)
     let html_anchor_re = Regex::new(r#"<a\s+[^>]*id\s*=\s*["']([^"']+)["'][^>]*>"#).unwrap();
-    for cap in html_anchor_re.captures_iter(content) {
-        valid_anchors.insert(cap[1].to_string());
+    let mut tracker = CodeBlockTracker::new();
+    for line in lines {
+        tracker.process_line(line);
+        if tracker.in_code_block() {
+            continue;
+        }
+        for cap in html_anchor_re.captures_iter(line) {
+            valid_anchors.insert(cap[1].to_string());
+        }
     }
 }
 
@@ -577,16 +605,13 @@ fn check_stale_code_refs(
     let code_ref_re =
         Regex::new(r"(?:`([^`]+\.(rs|py|js|ts|go|java|rb|c|cpp|h|hpp))`|\[([^\]]*)\]\(([^)]+\.(rs|py|js|ts|go|java|rb|c|cpp|h|hpp))\))").unwrap();
 
-    let mut in_code_block = false;
+    let mut tracker = CodeBlockTracker::new();
 
     for (line_num, line) in lines.iter().enumerate() {
-        // Track code blocks
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
+        // Track code blocks (handles language tags and nested fences)
+        tracker.process_line(line);
 
-        if in_code_block {
+        if tracker.in_code_block() {
             continue;
         }
 
@@ -634,8 +659,16 @@ fn check_inconsistent_headings(path: &Path, lines: &[&str], results: &mut LintRe
     let atx_re = Regex::new(r"^(#{1,6})\s").unwrap();
 
     let mut first_style: Option<bool> = None; // true = ATX with space, false = ATX without space
+    let mut tracker = CodeBlockTracker::new();
 
     for (line_num, line) in lines.iter().enumerate() {
+        // Track code blocks (handles language tags and nested fences)
+        tracker.process_line(line);
+
+        if tracker.in_code_block() {
+            continue;
+        }
+
         // Check for ATX headings
         if line.starts_with('#') {
             let has_space = atx_re.is_match(line);
@@ -684,15 +717,13 @@ fn check_missing_alt_text(path: &Path, lines: &[&str], results: &mut LintResults
     let html_img_re = Regex::new(r#"<img\s+[^>]*>"#).unwrap();
     let alt_attr_re = Regex::new(r#"alt\s*=\s*["']([^"']*)["']"#).unwrap();
 
-    let mut in_code_block = false;
+    let mut tracker = CodeBlockTracker::new();
 
     for (line_num, line) in lines.iter().enumerate() {
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
+        // Track code blocks (handles language tags and nested fences)
+        tracker.process_line(line);
 
-        if in_code_block {
+        if tracker.in_code_block() {
             continue;
         }
 
@@ -738,17 +769,14 @@ fn check_long_paragraphs(path: &Path, doc: &ParsedDoc, max_words: u32, results: 
         let content = &section.content;
         let paragraph_start_line = section.start_line;
         let mut paragraph_words = 0;
-        let mut in_code_block = false;
+        let mut tracker = CodeBlockTracker::new();
         let mut paragraph_line_offset = 0;
 
         for (offset, line) in content.lines().enumerate() {
-            // Track code blocks
-            if line.trim_start().starts_with("```") {
-                in_code_block = !in_code_block;
-                continue;
-            }
+            // Track code blocks (handles language tags and nested fences)
+            tracker.process_line(line);
 
-            if in_code_block {
+            if tracker.in_code_block() {
                 continue;
             }
 
@@ -803,15 +831,13 @@ fn check_duplicate_headings(path: &Path, lines: &[&str], results: &mut LintResul
     // Track headings by level: level -> (text -> line_number)
     let mut headings_by_level: HashMap<usize, HashMap<String, usize>> = HashMap::new();
 
-    let mut in_code_block = false;
+    let mut tracker = CodeBlockTracker::new();
 
     for (line_num, line) in lines.iter().enumerate() {
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
+        // Track code blocks (handles language tags and nested fences)
+        tracker.process_line(line);
 
-        if in_code_block {
+        if tracker.in_code_block() {
             continue;
         }
 
@@ -1306,5 +1332,136 @@ Second section.
 
         assert_eq!(parsed["files_linted"], 1);
         assert_eq!(parsed["issues"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_skip_links_inside_code_blocks_with_language() {
+        let temp_dir = TempDir::new().unwrap();
+        create_test_config(&temp_dir);
+        let path = create_test_doc(
+            &temp_dir,
+            "test.md",
+            r#"# Test
+See [real link](missing.md) outside code.
+
+```bash
+# This link should be ignored: [fake link](also-missing.md)
+echo "hello"
+```
+
+And [another link](another-missing.md) outside.
+"#,
+        );
+
+        let content = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        let mut results = LintResults::new();
+
+        check_broken_internal_links(&path, &lines, temp_dir.path(), &mut results).unwrap();
+
+        // Should only find 2 issues (for the links outside code blocks)
+        assert_eq!(results.issues.len(), 2);
+        assert!(
+            results
+                .issues
+                .iter()
+                .all(|i| i.message.contains("missing.md")
+                    || i.message.contains("another-missing.md"))
+        );
+        assert!(
+            results
+                .issues
+                .iter()
+                .all(|i| !i.message.contains("also-missing.md"))
+        );
+    }
+
+    #[test]
+    fn test_skip_headings_inside_nested_code_blocks() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = create_test_doc(
+            &temp_dir,
+            "test.md",
+            r#"# Test
+## First
+
+````markdown
+Here's an example:
+```bash
+## Fake Heading Inside
+echo "test"
+```
+````
+
+## Second
+"#,
+        );
+
+        let content = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        let mut results = LintResults::new();
+
+        check_duplicate_headings(&path, &lines, &mut results);
+
+        // Should find no duplicates (the "Fake Heading" is inside a nested code block)
+        assert!(
+            results.issues.is_empty(),
+            "Expected no issues but found: {:?}",
+            results.issues
+        );
+    }
+
+    #[test]
+    fn test_skip_code_refs_inside_code_blocks() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = create_test_doc(
+            &temp_dir,
+            "test.md",
+            r#"# Test
+
+Reference outside: `src/missing.rs`
+
+```rust
+// This should be ignored: src/also-missing.rs
+fn main() {}
+```
+"#,
+        );
+
+        let content = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        let mut results = LintResults::new();
+
+        check_stale_code_refs(&path, &lines, temp_dir.path(), &mut results);
+
+        // Should only find one stale ref (the one outside the code block)
+        assert_eq!(results.issues.len(), 1);
+        assert!(results.issues[0].message.contains("src/missing.rs"));
+    }
+
+    #[test]
+    fn test_skip_images_inside_code_blocks() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = create_test_doc(
+            &temp_dir,
+            "test.md",
+            r#"# Test
+
+![](real-image.png)
+
+```markdown
+![](fake-image.png)
+```
+"#,
+        );
+
+        let content = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        let mut results = LintResults::new();
+
+        check_missing_alt_text(&path, &lines, &mut results);
+
+        // Should only find one issue (the image outside the code block)
+        assert_eq!(results.issues.len(), 1);
     }
 }

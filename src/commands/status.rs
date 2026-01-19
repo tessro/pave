@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::cli::StatusOutputFormat;
-use crate::commands::hooks::{find_git_hooks_dir_from, PAVER_HOOK_MARKER};
-use crate::config::{PaverConfig, CONFIG_FILENAME};
+use crate::commands::hooks::{PAVER_HOOK_MARKER, find_git_hooks_dir_from};
+use crate::config::{CONFIG_FILENAME, PaverConfig};
 use crate::parser::ParsedDoc;
-use crate::rules::{detect_doc_type, DocType, RulesEngine};
+use crate::rules::{DocType, RulesEngine, detect_doc_type};
 
 /// Arguments for the `paver status` command.
 pub struct StatusArgs {
@@ -98,8 +98,7 @@ impl StatusResults {
 
     fn update_compliance_percent(&mut self) {
         if self.total_docs > 0 {
-            self.compliance_percent =
-                (self.compliant_docs as f64 / self.total_docs as f64) * 100.0;
+            self.compliance_percent = (self.compliant_docs as f64 / self.total_docs as f64) * 100.0;
         }
     }
 
@@ -153,8 +152,7 @@ pub fn execute(args: StatusArgs) -> Result<()> {
     let mut results = StatusResults::new(config.docs.root.clone());
 
     // Check if gradual mode is in use (verification/examples not required)
-    results.gradual_mode =
-        !config.rules.require_verification || !config.rules.require_examples;
+    results.gradual_mode = !config.rules.require_verification || !config.rules.require_examples;
 
     // Check if hooks are installed
     results.hooks_installed = check_hooks_installed(config_dir);
@@ -217,9 +215,17 @@ pub fn execute(args: StatusArgs) -> Result<()> {
                 let summary = if is_compliant && warning_count == 0 {
                     "compliant".to_string()
                 } else if is_compliant {
-                    format!("{} warning{}", warning_count, if warning_count == 1 { "" } else { "s" })
+                    format!(
+                        "{} warning{}",
+                        warning_count,
+                        if warning_count == 1 { "" } else { "s" }
+                    )
                 } else {
-                    format!("{} error{}", error_count, if error_count == 1 { "" } else { "s" })
+                    format!(
+                        "{} error{}",
+                        error_count,
+                        if error_count == 1 { "" } else { "s" }
+                    )
                 };
 
                 recent_changes.push(ChangedDoc {
@@ -305,7 +311,13 @@ fn analyze_file(
     let is_compliant = error_count == 0;
     let has_warnings = warning_count > 0;
 
-    Ok(Some((is_compliant, has_warnings, error_count, warning_count, doc_type)))
+    Ok(Some((
+        is_compliant,
+        has_warnings,
+        error_count,
+        warning_count,
+        doc_type,
+    )))
 }
 
 /// Check if pre-commit hook is installed by paver.
@@ -541,11 +553,7 @@ fn output_text(results: &StatusResults) {
             println!("Recent Changes:");
             for change in changes {
                 let status_indicator = if change.is_compliant {
-                    if change.warning_count > 0 {
-                        "!"
-                    } else {
-                        "✓"
-                    }
+                    if change.warning_count > 0 { "!" } else { "✓" }
                 } else {
                     "✗"
                 };
@@ -564,9 +572,15 @@ fn output_text(results: &StatusResults) {
     println!();
     if results.gradual_mode {
         let readiness = if results.strict_mode_ready {
-            format!("strict mode ready: {:.0}% compliant", results.compliance_percent)
+            format!(
+                "strict mode ready: {:.0}% compliant",
+                results.compliance_percent
+            )
         } else {
-            format!("need {:.0}% more for strict mode", 50.0 - results.compliance_percent)
+            format!(
+                "need {:.0}% more for strict mode",
+                50.0 - results.compliance_percent
+            )
         };
         println!("Mode: gradual ({})", readiness);
     } else {

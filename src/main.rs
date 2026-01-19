@@ -17,7 +17,7 @@ use paver::commands::init;
 use paver::commands::lint::{self, LintArgs};
 use paver::commands::migrate::{self, MigrateArgs};
 use paver::commands::new::{self, NewArgs};
-use paver::commands::prompt::{generate_prompt, OutputFormat, PromptOptions};
+use paver::commands::prompt::{OutputFormat, PromptOptions, generate_prompt};
 use paver::commands::status::{self, StatusArgs};
 use paver::commands::verify::{self, VerifyArgs};
 use paver::templates::TemplateType;

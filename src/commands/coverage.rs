@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::CoverageOutputFormat;
 use crate::config::{CONFIG_FILENAME, PaverConfig};
+use crate::parser::CodeBlockTracker;
 
 /// Arguments for the `paver coverage` command.
 pub struct CoverageArgs {
@@ -352,19 +353,16 @@ fn parse_doc_mapping(path: &Path, _config_dir: &Path) -> Result<Option<DocMappin
 fn extract_paths_patterns(content: &str) -> Vec<String> {
     let mut patterns = Vec::new();
     let mut in_paths_section = false;
-    let mut in_code_block = false;
+    let mut tracker = CodeBlockTracker::new();
 
     for line in content.lines() {
         let trimmed = line.trim();
 
-        // Track code blocks to skip headings inside them
-        if trimmed.starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
+        // Track code blocks (handles language tags and nested fences)
+        tracker.process_line(trimmed);
 
         // Skip processing if inside a code block
-        if in_code_block {
+        if tracker.in_code_block() {
             continue;
         }
 

@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::{CONFIG_FILENAME, PaverConfig};
-use crate::parser::ParsedDoc;
+use crate::parser::{CodeBlockTracker, ParsedDoc};
 use crate::rules::{DocType, detect_doc_type};
 
 /// Arguments for the migrate command.
@@ -363,19 +363,16 @@ fn find_insertion_position(lines: &[String], section_name: &str) -> usize {
 
     // Find all existing H2 sections and their orders
     let mut sections: Vec<(usize, usize)> = Vec::new(); // (line_idx, order)
-    let mut in_code_block = false;
+    let mut tracker = CodeBlockTracker::new();
 
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
 
-        // Track code block state
-        if trimmed.starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
+        // Track code block state (handles language tags and nested fences)
+        tracker.process_line(trimmed);
 
         // Skip headings inside code blocks
-        if in_code_block {
+        if tracker.in_code_block() {
             continue;
         }
 

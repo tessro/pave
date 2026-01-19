@@ -1328,10 +1328,7 @@ gradual = {}
         config_path
     }
 
-    fn create_test_config_with_gradual_until(
-        temp_dir: &TempDir,
-        gradual_until: &str,
-    ) -> PathBuf {
+    fn create_test_config_with_gradual_until(temp_dir: &TempDir, gradual_until: &str) -> PathBuf {
         let config_content = format!(
             r#"
 [paver]

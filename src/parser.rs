@@ -619,6 +619,62 @@ impl ParsedDoc {
     }
 }
 
+/// Tracks whether we're inside a code block while iterating through lines.
+///
+/// This properly handles:
+/// - Language tags after opening fences (e.g., `` ```bash ``)
+/// - Nested code blocks using longer fences (e.g., ```` ```` ```` to wrap `` ``` ``)
+/// - Closing fences that must have at least as many backticks as the opening
+#[derive(Debug, Default, Clone)]
+pub struct CodeBlockTracker {
+    /// Current fence length if inside a code block, None if outside.
+    fence_len: Option<usize>,
+}
+
+impl CodeBlockTracker {
+    /// Create a new tracker starting outside any code block.
+    pub fn new() -> Self {
+        Self { fence_len: None }
+    }
+
+    /// Check if currently inside a code block.
+    pub fn in_code_block(&self) -> bool {
+        self.fence_len.is_some()
+    }
+
+    /// Process a line and update the code block state.
+    /// Returns true if this line is a fence marker (opening or closing).
+    pub fn process_line(&mut self, line: &str) -> bool {
+        let trimmed = line.trim_start();
+
+        if !trimmed.starts_with("```") {
+            return false;
+        }
+
+        // Count backticks at the start
+        let backtick_count = trimmed.chars().take_while(|&c| c == '`').count();
+        if backtick_count < 3 {
+            return false;
+        }
+
+        if let Some(opening_len) = self.fence_len {
+            // We're inside a code block - check if this is a valid closing fence
+            // Closing fence must have at least as many backticks and nothing after
+            let after_backticks = &trimmed[backtick_count..];
+            if backtick_count >= opening_len && after_backticks.trim().is_empty() {
+                self.fence_len = None;
+                return true;
+            }
+            // Not a valid closing fence - treat as content
+            false
+        } else {
+            // We're outside - this is an opening fence
+            self.fence_len = Some(backtick_count);
+            true
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1719,5 +1775,99 @@ echo test
         let block = &section.code_blocks[0];
         assert!(block.env_vars.is_empty());
         assert!(block.working_dir.is_none());
+    }
+
+    #[test]
+    fn code_block_tracker_basic() {
+        let mut tracker = CodeBlockTracker::new();
+        assert!(!tracker.in_code_block());
+
+        // Opening fence
+        assert!(tracker.process_line("```"));
+        assert!(tracker.in_code_block());
+
+        // Content inside
+        assert!(!tracker.process_line("some code"));
+        assert!(tracker.in_code_block());
+
+        // Closing fence
+        assert!(tracker.process_line("```"));
+        assert!(!tracker.in_code_block());
+    }
+
+    #[test]
+    fn code_block_tracker_with_language_tag() {
+        let mut tracker = CodeBlockTracker::new();
+
+        // Opening fence with language tag
+        assert!(tracker.process_line("```bash"));
+        assert!(tracker.in_code_block());
+
+        // Content
+        assert!(!tracker.process_line("echo hello"));
+        assert!(tracker.in_code_block());
+
+        // Closing fence
+        assert!(tracker.process_line("```"));
+        assert!(!tracker.in_code_block());
+    }
+
+    #[test]
+    fn code_block_tracker_nested_fences() {
+        let mut tracker = CodeBlockTracker::new();
+
+        // Opening fence with 4 backticks (for nesting)
+        assert!(tracker.process_line("````markdown"));
+        assert!(tracker.in_code_block());
+
+        // Inner fence with 3 backticks (not a closing fence)
+        assert!(!tracker.process_line("```rust"));
+        assert!(tracker.in_code_block());
+
+        // Content
+        assert!(!tracker.process_line("fn main() {}"));
+        assert!(tracker.in_code_block());
+
+        // Inner closing fence (not the outer closing fence)
+        assert!(!tracker.process_line("```"));
+        assert!(tracker.in_code_block());
+
+        // Outer closing fence
+        assert!(tracker.process_line("````"));
+        assert!(!tracker.in_code_block());
+    }
+
+    #[test]
+    fn code_block_tracker_closing_fence_must_be_clean() {
+        let mut tracker = CodeBlockTracker::new();
+
+        // Opening fence
+        assert!(tracker.process_line("```"));
+        assert!(tracker.in_code_block());
+
+        // Line that starts with backticks but has content after (not a closing fence)
+        assert!(!tracker.process_line("```python"));
+        assert!(tracker.in_code_block());
+
+        // Valid closing fence
+        assert!(tracker.process_line("```"));
+        assert!(!tracker.in_code_block());
+    }
+
+    #[test]
+    fn code_block_tracker_indented_fence() {
+        let mut tracker = CodeBlockTracker::new();
+
+        // Opening fence with leading whitespace
+        assert!(tracker.process_line("  ```bash"));
+        assert!(tracker.in_code_block());
+
+        // Content
+        assert!(!tracker.process_line("  echo hello"));
+        assert!(tracker.in_code_block());
+
+        // Closing fence with leading whitespace
+        assert!(tracker.process_line("  ```"));
+        assert!(!tracker.in_code_block());
     }
 }
