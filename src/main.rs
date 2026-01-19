@@ -9,6 +9,7 @@ use paver::commands::index;
 use paver::commands::init;
 use paver::commands::new::{self, NewArgs};
 use paver::commands::prompt::{OutputFormat, PromptOptions, generate_prompt};
+use paver::commands::verify::{self, VerifyArgs};
 use paver::templates::TemplateType;
 
 fn main() -> Result<()> {
@@ -111,6 +112,21 @@ fn main() -> Result<()> {
                 base,
                 format,
                 strict,
+            })?;
+        }
+        Command::Verify {
+            paths,
+            format,
+            report,
+            timeout,
+            keep_going,
+        } => {
+            verify::execute(VerifyArgs {
+                paths,
+                format,
+                report,
+                timeout,
+                keep_going,
             })?;
         }
     }

@@ -131,6 +131,29 @@ pub enum Command {
         #[arg(long)]
         strict: bool,
     },
+
+    /// Run verification commands from PAVED documents
+    Verify {
+        /// Specific files or directories to verify [default: docs root from config]
+        #[arg()]
+        paths: Vec<PathBuf>,
+
+        /// Output format: text, json, github
+        #[arg(long, default_value = "text", value_enum)]
+        format: OutputFormat,
+
+        /// Write JSON report to file
+        #[arg(long)]
+        report: Option<PathBuf>,
+
+        /// Timeout per command in seconds
+        #[arg(long, default_value = "30")]
+        timeout: u32,
+
+        /// Continue running after first failure
+        #[arg(long)]
+        keep_going: bool,
+    },
 }
 
 /// Output format for the `paver changed` command.

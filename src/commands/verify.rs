@@ -1,0 +1,846 @@
+//! Implementation of the `paver verify` command for running verification commands.
+
+use anyhow::{Context, Result};
+use serde::Serialize;
+use std::env;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+use crate::cli::OutputFormat;
+use crate::config::{CONFIG_FILENAME, PaverConfig};
+use crate::parser::ParsedDoc;
+use crate::verification::{VerificationItem, VerificationSpec, extract_verification_spec};
+
+/// Arguments for the `paver verify` command.
+pub struct VerifyArgs {
+    /// Specific files or directories to verify.
+    pub paths: Vec<PathBuf>,
+    /// Output format.
+    pub format: OutputFormat,
+    /// Path to write JSON report.
+    pub report: Option<PathBuf>,
+    /// Timeout per command in seconds.
+    pub timeout: u32,
+    /// Continue running after first failure.
+    pub keep_going: bool,
+}
+
+/// Status of a verification command execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VerifyStatus {
+    Pass,
+    Fail,
+    Timeout,
+    Skipped,
+}
+
+/// Result of running a single verification command.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandResult {
+    /// The command that was run.
+    pub command: String,
+    /// Status of the command.
+    pub status: VerifyStatus,
+    /// Exit code if the command completed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Expected exit code.
+    pub expected_exit_code: i32,
+    /// Standard output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    /// Standard error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+    /// Duration in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+/// Result of verifying a single document.
+#[derive(Debug, Clone, Serialize)]
+pub struct DocumentResult {
+    /// Path to the document.
+    pub file: PathBuf,
+    /// Line number of the Verification section.
+    pub section_line: usize,
+    /// Results for each command.
+    pub commands: Vec<CommandResult>,
+    /// Overall status of the document.
+    pub status: VerifyStatus,
+}
+
+impl DocumentResult {
+    fn new(spec: &VerificationSpec) -> Self {
+        Self {
+            file: spec.source_file.clone(),
+            section_line: spec.section_line,
+            commands: Vec::new(),
+            status: VerifyStatus::Pass,
+        }
+    }
+
+    fn add_result(&mut self, result: CommandResult) {
+        if result.status != VerifyStatus::Pass {
+            self.status = result.status;
+        }
+        self.commands.push(result);
+    }
+
+    fn is_success(&self) -> bool {
+        self.status == VerifyStatus::Pass
+    }
+}
+
+/// Aggregate results of running all verifications.
+#[derive(Debug, Serialize)]
+pub struct VerifyResults {
+    /// Number of documents with verification sections.
+    pub documents_verified: usize,
+    /// Number of commands executed.
+    pub commands_executed: usize,
+    /// Number of commands that passed.
+    pub commands_passed: usize,
+    /// Number of commands that failed.
+    pub commands_failed: usize,
+    /// Results per document.
+    pub documents: Vec<DocumentResult>,
+}
+
+impl VerifyResults {
+    fn new() -> Self {
+        Self {
+            documents_verified: 0,
+            commands_executed: 0,
+            commands_passed: 0,
+            commands_failed: 0,
+            documents: Vec::new(),
+        }
+    }
+
+    fn add_document(&mut self, doc_result: DocumentResult) {
+        for cmd in &doc_result.commands {
+            self.commands_executed += 1;
+            if cmd.status == VerifyStatus::Pass {
+                self.commands_passed += 1;
+            } else if cmd.status != VerifyStatus::Skipped {
+                self.commands_failed += 1;
+            }
+        }
+        self.documents_verified += 1;
+        self.documents.push(doc_result);
+    }
+
+    fn is_success(&self) -> bool {
+        self.commands_failed == 0
+    }
+}
+
+/// Execute the `paver verify` command.
+pub fn execute(args: VerifyArgs) -> Result<()> {
+    // Find and load config
+    let config_path = find_config()?;
+    let config = PaverConfig::load(&config_path)?;
+    let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+
+    // Determine paths to verify
+    let paths = if args.paths.is_empty() {
+        vec![config_dir.join(&config.docs.root)]
+    } else {
+        args.paths.clone()
+    };
+
+    // Find all markdown files
+    let files = find_markdown_files(&paths)?;
+
+    if files.is_empty() {
+        eprintln!("No markdown files found to verify");
+        return Ok(());
+    }
+
+    // Collect verification specs from all documents
+    let mut specs: Vec<VerificationSpec> = Vec::new();
+    for file in &files {
+        let doc = ParsedDoc::parse(file)?;
+        if let Some(spec) = extract_verification_spec(&doc) {
+            specs.push(spec);
+        }
+    }
+
+    if specs.is_empty() {
+        eprintln!("No verification sections found in documents");
+        return Ok(());
+    }
+
+    // Run verifications
+    let mut results = VerifyResults::new();
+    let timeout = Duration::from_secs(args.timeout as u64);
+
+    for spec in &specs {
+        let doc_result = run_verification(spec, timeout, args.keep_going, config_dir)?;
+        let should_stop = !doc_result.is_success() && !args.keep_going;
+        results.add_document(doc_result);
+
+        if should_stop {
+            break;
+        }
+    }
+
+    // Output results in the requested format
+    match args.format {
+        OutputFormat::Text => output_text(&results),
+        OutputFormat::Json => output_json(&results)?,
+        OutputFormat::Github => output_github(&results),
+    }
+
+    // Write report file if requested
+    if let Some(report_path) = &args.report {
+        write_report(&results, report_path)?;
+    }
+
+    // Return error if verifications failed
+    if results.is_success() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "Verification failed: {} of {} command{} failed",
+            results.commands_failed,
+            results.commands_executed,
+            if results.commands_executed == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+    }
+}
+
+/// Run verification commands for a single document.
+fn run_verification(
+    spec: &VerificationSpec,
+    timeout: Duration,
+    keep_going: bool,
+    working_dir: &Path,
+) -> Result<DocumentResult> {
+    let mut doc_result = DocumentResult::new(spec);
+
+    for item in &spec.items {
+        let cmd_result = run_command(item, timeout, working_dir);
+        let is_failure = cmd_result.status != VerifyStatus::Pass;
+        doc_result.add_result(cmd_result);
+
+        if is_failure && !keep_going {
+            // Mark remaining commands as skipped
+            for remaining in spec.items.iter().skip(doc_result.commands.len()) {
+                doc_result.add_result(CommandResult {
+                    command: remaining.command.clone(),
+                    status: VerifyStatus::Skipped,
+                    exit_code: None,
+                    expected_exit_code: remaining.expected_exit_code.unwrap_or(0),
+                    stdout: None,
+                    stderr: None,
+                    duration_ms: None,
+                });
+            }
+            break;
+        }
+    }
+
+    Ok(doc_result)
+}
+
+/// Run a single verification command.
+fn run_command(item: &VerificationItem, timeout: Duration, working_dir: &Path) -> CommandResult {
+    let expected_exit_code = item.expected_exit_code.unwrap_or(0);
+    let start = std::time::Instant::now();
+
+    // Use item's working_dir if specified, otherwise use config_dir
+    let cmd_working_dir = item.working_dir.as_deref().unwrap_or(working_dir);
+
+    // Execute command via shell
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&item.command)
+        .current_dir(cmd_working_dir)
+        .output();
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    match output {
+        Ok(output) => {
+            let exit_code = output.status.code();
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+            // Check if timed out (heuristic: check if duration exceeds timeout)
+            if duration_ms >= timeout.as_millis() as u64 {
+                return CommandResult {
+                    command: item.command.clone(),
+                    status: VerifyStatus::Timeout,
+                    exit_code,
+                    expected_exit_code,
+                    stdout: Some(stdout),
+                    stderr: Some(stderr),
+                    duration_ms: Some(duration_ms),
+                };
+            }
+
+            // Check exit code
+            let status = if exit_code == Some(expected_exit_code) {
+                VerifyStatus::Pass
+            } else {
+                VerifyStatus::Fail
+            };
+
+            CommandResult {
+                command: item.command.clone(),
+                status,
+                exit_code,
+                expected_exit_code,
+                stdout: if stdout.is_empty() {
+                    None
+                } else {
+                    Some(stdout)
+                },
+                stderr: if stderr.is_empty() {
+                    None
+                } else {
+                    Some(stderr)
+                },
+                duration_ms: Some(duration_ms),
+            }
+        }
+        Err(e) => CommandResult {
+            command: item.command.clone(),
+            status: VerifyStatus::Fail,
+            exit_code: None,
+            expected_exit_code,
+            stdout: None,
+            stderr: Some(format!("Failed to execute command: {}", e)),
+            duration_ms: Some(duration_ms),
+        },
+    }
+}
+
+/// Find the .paver.toml config file by walking up from the current directory.
+fn find_config() -> Result<PathBuf> {
+    let current_dir = env::current_dir().context("Failed to get current directory")?;
+    let mut dir = current_dir.as_path();
+
+    loop {
+        let config_path = dir.join(CONFIG_FILENAME);
+        if config_path.exists() {
+            return Ok(config_path);
+        }
+
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => anyhow::bail!(
+                "No {} found in current directory or any parent directory",
+                CONFIG_FILENAME
+            ),
+        }
+    }
+}
+
+/// Find all markdown files in the given paths.
+fn find_markdown_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+
+    for path in paths {
+        if path.is_file() {
+            if path.extension().is_some_and(|ext| ext == "md") {
+                files.push(path.clone());
+            }
+        } else if path.is_dir() {
+            collect_markdown_files_recursive(path, &mut files)?;
+        } else {
+            anyhow::bail!("Path does not exist: {}", path.display());
+        }
+    }
+
+    // Sort for consistent output
+    files.sort();
+    Ok(files)
+}
+
+/// Recursively collect markdown files from a directory.
+fn collect_markdown_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    let entries = std::fs::read_dir(dir)
+        .with_context(|| format!("Failed to read directory: {}", dir.display()))?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            collect_markdown_files_recursive(&path, files)?;
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+/// Output results in text format.
+fn output_text(results: &VerifyResults) {
+    for doc in &results.documents {
+        println!("{}:{}", doc.file.display(), doc.section_line);
+
+        for cmd in &doc.commands {
+            let status_str = match cmd.status {
+                VerifyStatus::Pass => "PASS",
+                VerifyStatus::Fail => "FAIL",
+                VerifyStatus::Timeout => "TIMEOUT",
+                VerifyStatus::Skipped => "SKIPPED",
+            };
+
+            let duration_str = cmd
+                .duration_ms
+                .map(|d| format!(" ({:.2}s)", d as f64 / 1000.0))
+                .unwrap_or_default();
+
+            println!("  [{}]{} {}", status_str, duration_str, cmd.command);
+
+            // Show failure details
+            if cmd.status == VerifyStatus::Fail {
+                if let Some(code) = cmd.exit_code {
+                    println!(
+                        "    exit code: {} (expected {})",
+                        code, cmd.expected_exit_code
+                    );
+                }
+                if let Some(stderr) = &cmd.stderr
+                    && !stderr.is_empty()
+                {
+                    for line in stderr.lines().take(5) {
+                        println!("    stderr: {}", line);
+                    }
+                }
+            }
+        }
+        println!();
+    }
+
+    // Print summary
+    print!(
+        "Verified {} document{}: ",
+        results.documents_verified,
+        if results.documents_verified == 1 {
+            ""
+        } else {
+            "s"
+        }
+    );
+
+    if results.commands_failed == 0 {
+        println!(
+            "{} command{} passed",
+            results.commands_passed,
+            if results.commands_passed == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+    } else {
+        println!(
+            "{} passed, {} failed",
+            results.commands_passed, results.commands_failed
+        );
+    }
+}
+
+/// Output results in JSON format.
+fn output_json(results: &VerifyResults) -> Result<()> {
+    let json = serde_json::to_string_pretty(results).context("Failed to serialize results")?;
+    println!("{}", json);
+    Ok(())
+}
+
+/// Output results in GitHub Actions annotation format.
+fn output_github(results: &VerifyResults) {
+    for doc in &results.documents {
+        for cmd in &doc.commands {
+            if cmd.status != VerifyStatus::Pass {
+                let level = match cmd.status {
+                    VerifyStatus::Fail | VerifyStatus::Timeout => "error",
+                    VerifyStatus::Skipped => "warning",
+                    VerifyStatus::Pass => continue,
+                };
+
+                let message = match cmd.status {
+                    VerifyStatus::Fail => {
+                        format!(
+                            "Command failed: {} (exit code: {:?}, expected: {})",
+                            cmd.command, cmd.exit_code, cmd.expected_exit_code
+                        )
+                    }
+                    VerifyStatus::Timeout => {
+                        format!("Command timed out: {}", cmd.command)
+                    }
+                    VerifyStatus::Skipped => {
+                        format!("Command skipped: {}", cmd.command)
+                    }
+                    VerifyStatus::Pass => continue,
+                };
+
+                println!(
+                    "::{} file={},line={}::{}",
+                    level,
+                    doc.file.display(),
+                    doc.section_line,
+                    message
+                );
+            }
+        }
+    }
+}
+
+/// Write JSON report to file.
+fn write_report(results: &VerifyResults, path: &Path) -> Result<()> {
+    let json = serde_json::to_string_pretty(results).context("Failed to serialize results")?;
+    let mut file = std::fs::File::create(path)
+        .with_context(|| format!("Failed to create {}", path.display()))?;
+    file.write_all(json.as_bytes())
+        .with_context(|| format!("Failed to write to {}", path.display()))?;
+    eprintln!("Report written to {}", path.display());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_config(temp_dir: &TempDir) -> PathBuf {
+        let config_content = r#"
+[paver]
+version = "0.1"
+
+[docs]
+root = "docs"
+
+[rules]
+max_lines = 300
+require_verification = true
+require_examples = true
+"#;
+        let config_path = temp_dir.path().join(".paver.toml");
+        fs::write(&config_path, config_content).unwrap();
+        config_path
+    }
+
+    fn create_doc_with_verification(
+        temp_dir: &TempDir,
+        filename: &str,
+        commands: &[&str],
+    ) -> PathBuf {
+        let docs_dir = temp_dir.path().join("docs");
+        fs::create_dir_all(&docs_dir).unwrap();
+
+        let commands_str = commands
+            .iter()
+            .map(|c| format!("$ {}", c))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let content = format!(
+            r#"# Test Document
+
+## Purpose
+A test document.
+
+## Verification
+```bash
+{}
+```
+
+## Examples
+Example here.
+"#,
+            commands_str
+        );
+
+        let path = docs_dir.join(filename);
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn verify_status_serializes_lowercase() {
+        let pass = serde_json::to_string(&VerifyStatus::Pass).unwrap();
+        let fail = serde_json::to_string(&VerifyStatus::Fail).unwrap();
+        let timeout = serde_json::to_string(&VerifyStatus::Timeout).unwrap();
+        let skipped = serde_json::to_string(&VerifyStatus::Skipped).unwrap();
+
+        assert_eq!(pass, "\"pass\"");
+        assert_eq!(fail, "\"fail\"");
+        assert_eq!(timeout, "\"timeout\"");
+        assert_eq!(skipped, "\"skipped\"");
+    }
+
+    #[test]
+    fn document_result_tracks_status() {
+        let spec = VerificationSpec {
+            source_file: PathBuf::from("test.md"),
+            section_line: 10,
+            items: vec![],
+        };
+
+        let mut doc_result = DocumentResult::new(&spec);
+        assert!(doc_result.is_success());
+
+        doc_result.add_result(CommandResult {
+            command: "echo ok".to_string(),
+            status: VerifyStatus::Pass,
+            exit_code: Some(0),
+            expected_exit_code: 0,
+            stdout: None,
+            stderr: None,
+            duration_ms: Some(10),
+        });
+        assert!(doc_result.is_success());
+
+        doc_result.add_result(CommandResult {
+            command: "false".to_string(),
+            status: VerifyStatus::Fail,
+            exit_code: Some(1),
+            expected_exit_code: 0,
+            stdout: None,
+            stderr: None,
+            duration_ms: Some(5),
+        });
+        assert!(!doc_result.is_success());
+    }
+
+    #[test]
+    fn verify_results_aggregates_counts() {
+        let spec = VerificationSpec {
+            source_file: PathBuf::from("test.md"),
+            section_line: 10,
+            items: vec![],
+        };
+
+        let mut results = VerifyResults::new();
+        let mut doc_result = DocumentResult::new(&spec);
+
+        doc_result.add_result(CommandResult {
+            command: "echo 1".to_string(),
+            status: VerifyStatus::Pass,
+            exit_code: Some(0),
+            expected_exit_code: 0,
+            stdout: None,
+            stderr: None,
+            duration_ms: Some(10),
+        });
+
+        doc_result.add_result(CommandResult {
+            command: "false".to_string(),
+            status: VerifyStatus::Fail,
+            exit_code: Some(1),
+            expected_exit_code: 0,
+            stdout: None,
+            stderr: None,
+            duration_ms: Some(5),
+        });
+
+        results.add_document(doc_result);
+
+        assert_eq!(results.documents_verified, 1);
+        assert_eq!(results.commands_executed, 2);
+        assert_eq!(results.commands_passed, 1);
+        assert_eq!(results.commands_failed, 1);
+        assert!(!results.is_success());
+    }
+
+    #[test]
+    fn run_command_success() {
+        let item = VerificationItem {
+            command: "echo hello".to_string(),
+            working_dir: None,
+            expected_exit_code: Some(0),
+            expected_output: None,
+            timeout_secs: Some(30),
+        };
+
+        let result = run_command(&item, Duration::from_secs(30), Path::new("."));
+
+        assert_eq!(result.status, VerifyStatus::Pass);
+        assert_eq!(result.exit_code, Some(0));
+        assert!(
+            result
+                .stdout
+                .as_ref()
+                .map_or(false, |s| s.contains("hello"))
+        );
+    }
+
+    #[test]
+    fn run_command_failure() {
+        let item = VerificationItem {
+            command: "exit 1".to_string(),
+            working_dir: None,
+            expected_exit_code: Some(0),
+            expected_output: None,
+            timeout_secs: Some(30),
+        };
+
+        let result = run_command(&item, Duration::from_secs(30), Path::new("."));
+
+        assert_eq!(result.status, VerifyStatus::Fail);
+        assert_eq!(result.exit_code, Some(1));
+        assert_eq!(result.expected_exit_code, 0);
+    }
+
+    #[test]
+    fn run_command_expected_nonzero_exit() {
+        let item = VerificationItem {
+            command: "exit 1".to_string(),
+            working_dir: None,
+            expected_exit_code: Some(1),
+            expected_output: None,
+            timeout_secs: Some(30),
+        };
+
+        let result = run_command(&item, Duration::from_secs(30), Path::new("."));
+
+        assert_eq!(result.status, VerifyStatus::Pass);
+        assert_eq!(result.exit_code, Some(1));
+    }
+
+    #[test]
+    fn json_output_is_valid() {
+        let spec = VerificationSpec {
+            source_file: PathBuf::from("test.md"),
+            section_line: 10,
+            items: vec![],
+        };
+
+        let mut results = VerifyResults::new();
+        let mut doc_result = DocumentResult::new(&spec);
+        doc_result.add_result(CommandResult {
+            command: "echo ok".to_string(),
+            status: VerifyStatus::Pass,
+            exit_code: Some(0),
+            expected_exit_code: 0,
+            stdout: Some("ok\n".to_string()),
+            stderr: None,
+            duration_ms: Some(10),
+        });
+        results.add_document(doc_result);
+
+        let json = serde_json::to_string(&results).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["documents_verified"], 1);
+        assert_eq!(parsed["commands_passed"], 1);
+        assert_eq!(parsed["documents"][0]["commands"][0]["status"], "pass");
+    }
+
+    #[test]
+    fn find_markdown_files_collects_recursively() {
+        let temp_dir = TempDir::new().unwrap();
+        let docs_dir = temp_dir.path().join("docs");
+        let nested_dir = docs_dir.join("nested");
+        fs::create_dir_all(&nested_dir).unwrap();
+
+        fs::write(docs_dir.join("doc1.md"), "# Doc 1").unwrap();
+        fs::write(nested_dir.join("doc2.md"), "# Doc 2").unwrap();
+
+        let files = find_markdown_files(&[docs_dir]).unwrap();
+
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn integration_verify_passing_document() {
+        let temp_dir = TempDir::new().unwrap();
+        create_test_config(&temp_dir);
+        let doc_path =
+            create_doc_with_verification(&temp_dir, "passing.md", &["echo hello", "true"]);
+
+        let doc = ParsedDoc::parse(&doc_path).unwrap();
+        let spec = extract_verification_spec(&doc).unwrap();
+
+        let doc_result =
+            run_verification(&spec, Duration::from_secs(30), true, temp_dir.path()).unwrap();
+
+        assert!(doc_result.is_success());
+        assert_eq!(doc_result.commands.len(), 2);
+        assert!(
+            doc_result
+                .commands
+                .iter()
+                .all(|c| c.status == VerifyStatus::Pass)
+        );
+    }
+
+    #[test]
+    fn integration_verify_failing_document() {
+        let temp_dir = TempDir::new().unwrap();
+        create_test_config(&temp_dir);
+        let doc_path =
+            create_doc_with_verification(&temp_dir, "failing.md", &["echo hello", "false"]);
+
+        let doc = ParsedDoc::parse(&doc_path).unwrap();
+        let spec = extract_verification_spec(&doc).unwrap();
+
+        let doc_result =
+            run_verification(&spec, Duration::from_secs(30), true, temp_dir.path()).unwrap();
+
+        assert!(!doc_result.is_success());
+        assert_eq!(doc_result.commands[0].status, VerifyStatus::Pass);
+        assert_eq!(doc_result.commands[1].status, VerifyStatus::Fail);
+    }
+
+    #[test]
+    fn integration_keep_going_false_skips_remaining() {
+        let temp_dir = TempDir::new().unwrap();
+        create_test_config(&temp_dir);
+        let doc_path = create_doc_with_verification(
+            &temp_dir,
+            "skip.md",
+            &["false", "echo should-be-skipped"],
+        );
+
+        let doc = ParsedDoc::parse(&doc_path).unwrap();
+        let spec = extract_verification_spec(&doc).unwrap();
+
+        let doc_result =
+            run_verification(&spec, Duration::from_secs(30), false, temp_dir.path()).unwrap();
+
+        assert!(!doc_result.is_success());
+        assert_eq!(doc_result.commands.len(), 2);
+        assert_eq!(doc_result.commands[0].status, VerifyStatus::Fail);
+        assert_eq!(doc_result.commands[1].status, VerifyStatus::Skipped);
+    }
+
+    #[test]
+    fn integration_keep_going_true_runs_all() {
+        let temp_dir = TempDir::new().unwrap();
+        create_test_config(&temp_dir);
+        let doc_path = create_doc_with_verification(
+            &temp_dir,
+            "continue.md",
+            &["false", "echo second", "true"],
+        );
+
+        let doc = ParsedDoc::parse(&doc_path).unwrap();
+        let spec = extract_verification_spec(&doc).unwrap();
+
+        let doc_result =
+            run_verification(&spec, Duration::from_secs(30), true, temp_dir.path()).unwrap();
+
+        assert!(!doc_result.is_success());
+        assert_eq!(doc_result.commands.len(), 3);
+        assert_eq!(doc_result.commands[0].status, VerifyStatus::Fail);
+        assert_eq!(doc_result.commands[1].status, VerifyStatus::Pass);
+        assert_eq!(doc_result.commands[2].status, VerifyStatus::Pass);
+    }
+}
