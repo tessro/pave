@@ -13,6 +13,9 @@ pub struct PaverFrontmatter {
     /// Code paths that this document covers.
     #[serde(default)]
     pub paths: Vec<String>,
+    /// Working directory for verification commands in this document.
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 /// YAML frontmatter wrapper.
@@ -71,6 +74,10 @@ pub struct CodeBlock {
     pub is_executable: bool,
     /// Expected output for this code block, if specified.
     pub expected_output: Option<ExpectedOutput>,
+    /// Working directory override for this code block.
+    pub working_dir: Option<String>,
+    /// Environment variables to set for this code block.
+    pub env_vars: Vec<(String, String)>,
 }
 
 /// A section of a PAVED document (H2 heading and its content).
@@ -262,6 +269,8 @@ impl ParsedDoc {
         let mut opening_fence_len: usize = 0;
         let mut has_run_marker = false;
         let mut pending_expect_marker: Option<ExpectMatchStrategy> = None;
+        let mut pending_working_dir: Option<String> = None;
+        let mut pending_env_vars: Vec<(String, String)> = Vec::new();
 
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
@@ -274,6 +283,14 @@ impl ParsedDoc {
                 // Check for paver:expect marker before a code block
                 else if let Some(strategy) = Self::parse_expect_marker(trimmed) {
                     pending_expect_marker = Some(strategy);
+                }
+                // Check for paver:working_dir marker
+                else if let Some(dir) = Self::parse_working_dir_marker(trimmed) {
+                    pending_working_dir = Some(dir);
+                }
+                // Check for paver:env marker
+                else if let Some(env_var) = Self::parse_env_marker(trimmed) {
+                    pending_env_vars.push(env_var);
                 }
                 // Check for opening fence (at least 3 backticks)
                 else if let Some(fence_content) = Self::parse_opening_fence(trimmed) {
@@ -301,6 +318,9 @@ impl ParsedDoc {
                             });
                         }
                         // This block is not added as a code block itself
+                        // Also clear working_dir/env since they were for an expect block
+                        pending_working_dir = None;
+                        pending_env_vars.clear();
                     } else {
                         let is_executable =
                             Self::is_block_executable(&current_language, &content, has_run_marker);
@@ -315,6 +335,8 @@ impl ParsedDoc {
                             start_line: current_block_start,
                             is_executable,
                             expected_output: inline_output,
+                            working_dir: pending_working_dir.take(),
+                            env_vars: std::mem::take(&mut pending_env_vars),
                         });
                     }
                     in_code_block = false;
@@ -338,6 +360,8 @@ impl ParsedDoc {
                 start_line: current_block_start,
                 is_executable,
                 expected_output: inline_output,
+                working_dir: pending_working_dir,
+                env_vars: pending_env_vars,
             });
         }
 
@@ -440,6 +464,67 @@ impl ParsedDoc {
         for (pattern, strategy) in patterns {
             if trimmed.contains(pattern) {
                 return Some(strategy);
+            }
+        }
+
+        None
+    }
+
+    /// Parse a paver:working_dir marker and return the directory path.
+    ///
+    /// Supports:
+    /// - `<!-- paver:working_dir path/to/dir -->`
+    /// - `<!--paver:working_dir path/to/dir-->`
+    fn parse_working_dir_marker(line: &str) -> Option<String> {
+        let trimmed = line.trim();
+
+        // Try with spaces first
+        if let Some(rest) = trimmed.strip_prefix("<!-- paver:working_dir ")
+            && let Some(dir) = rest.strip_suffix(" -->")
+        {
+            let dir = dir.trim();
+            if !dir.is_empty() {
+                return Some(dir.to_string());
+            }
+        }
+
+        // Try without spaces
+        if let Some(rest) = trimmed.strip_prefix("<!--paver:working_dir ")
+            && let Some(dir) = rest.strip_suffix("-->")
+        {
+            let dir = dir.trim();
+            if !dir.is_empty() {
+                return Some(dir.to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Parse a paver:env marker and return the environment variable (key, value).
+    ///
+    /// Supports:
+    /// - `<!-- paver:env KEY=VALUE -->`
+    /// - `<!--paver:env KEY=VALUE-->`
+    fn parse_env_marker(line: &str) -> Option<(String, String)> {
+        let trimmed = line.trim();
+
+        let env_str = if let Some(rest) = trimmed.strip_prefix("<!-- paver:env ") {
+            rest.strip_suffix(" -->")
+        } else if let Some(rest) = trimmed.strip_prefix("<!--paver:env ") {
+            rest.strip_suffix("-->")
+        } else {
+            None
+        };
+
+        if let Some(env_str) = env_str {
+            let env_str = env_str.trim();
+            if let Some(eq_pos) = env_str.find('=') {
+                let key = env_str[..eq_pos].trim().to_string();
+                let value = env_str[eq_pos + 1..].trim().to_string();
+                if !key.is_empty() {
+                    return Some((key, value));
+                }
             }
         }
 
@@ -1451,5 +1536,188 @@ $ echo world
         assert!(block.content.contains("$ echo world"));
         // No expected output since there's nothing after the commands
         assert!(block.expected_output.is_none());
+    }
+
+    #[test]
+    fn parse_document_with_paver_working_dir_in_frontmatter() {
+        let content = r#"---
+paver:
+  working_dir: packages/api
+---
+# API Component
+
+## Purpose
+API service.
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+
+        assert!(doc.frontmatter.is_some());
+        let frontmatter = doc.frontmatter.unwrap();
+        assert_eq!(frontmatter.working_dir, Some("packages/api".to_string()));
+    }
+
+    #[test]
+    fn parse_paver_working_dir_inline_marker() {
+        let content = r#"# Test
+
+## Verification
+<!-- paver:working_dir packages/api -->
+```bash
+npm test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert!(block.is_executable);
+        assert_eq!(block.working_dir, Some("packages/api".to_string()));
+    }
+
+    #[test]
+    fn parse_paver_working_dir_inline_marker_without_spaces() {
+        let content = r#"# Test
+
+## Verification
+<!--paver:working_dir src/components-->
+```bash
+npm test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert_eq!(block.working_dir, Some("src/components".to_string()));
+    }
+
+    #[test]
+    fn parse_paver_env_inline_marker() {
+        let content = r#"# Test
+
+## Verification
+<!-- paver:env TEST_DB=sqlite:memory -->
+```bash
+cargo test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert!(block.is_executable);
+        assert_eq!(block.env_vars.len(), 1);
+        assert_eq!(
+            block.env_vars[0],
+            ("TEST_DB".to_string(), "sqlite:memory".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_multiple_paver_env_markers() {
+        let content = r#"# Test
+
+## Verification
+<!-- paver:env DEBUG=1 -->
+<!-- paver:env LOG_LEVEL=trace -->
+```bash
+cargo test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert_eq!(block.env_vars.len(), 2);
+        assert!(
+            block
+                .env_vars
+                .contains(&("DEBUG".to_string(), "1".to_string()))
+        );
+        assert!(
+            block
+                .env_vars
+                .contains(&("LOG_LEVEL".to_string(), "trace".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_paver_env_with_working_dir() {
+        let content = r#"# Test
+
+## Verification
+<!-- paver:working_dir packages/api -->
+<!-- paver:env NODE_ENV=test -->
+```bash
+npm test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert_eq!(block.working_dir, Some("packages/api".to_string()));
+        assert_eq!(block.env_vars.len(), 1);
+        assert_eq!(
+            block.env_vars[0],
+            ("NODE_ENV".to_string(), "test".to_string())
+        );
+    }
+
+    #[test]
+    fn markers_only_apply_to_next_block() {
+        let content = r#"# Test
+
+## Verification
+<!-- paver:working_dir packages/api -->
+```bash
+npm test
+```
+```bash
+echo no working dir
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 2);
+        // First block has working_dir
+        assert_eq!(
+            section.code_blocks[0].working_dir,
+            Some("packages/api".to_string())
+        );
+        // Second block has no working_dir
+        assert_eq!(section.code_blocks[1].working_dir, None);
+    }
+
+    #[test]
+    fn code_block_default_env_vars_is_empty() {
+        let content = r#"# Test
+
+## Verification
+```bash
+echo test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let section = doc.get_section("Verification").unwrap();
+
+        assert_eq!(section.code_blocks.len(), 1);
+        let block = &section.code_blocks[0];
+        assert!(block.env_vars.is_empty());
+        assert!(block.working_dir.is_none());
     }
 }

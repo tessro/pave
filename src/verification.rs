@@ -42,6 +42,8 @@ pub struct VerificationItem {
     pub expected_output: Option<OutputMatcher>,
     /// Timeout in seconds (default: 30).
     pub timeout_secs: Option<u32>,
+    /// Environment variables to set for this command.
+    pub env_vars: Vec<(String, String)>,
 }
 
 impl Default for VerificationItem {
@@ -52,6 +54,7 @@ impl Default for VerificationItem {
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(DEFAULT_TIMEOUT_SECS),
+            env_vars: Vec::new(),
         }
     }
 }
@@ -106,17 +109,31 @@ pub fn extract_verification_spec(doc: &ParsedDoc) -> Option<VerificationSpec> {
         return None;
     }
 
+    // Get default working_dir from frontmatter
+    let default_working_dir = doc
+        .frontmatter
+        .as_ref()
+        .and_then(|fm| fm.working_dir.as_ref())
+        .map(PathBuf::from);
+
     let items: Vec<VerificationItem> = executable_blocks
         .into_iter()
         .map(|block| {
             let command = extract_command_from_block(&block.content);
             let expected_output = convert_expected_output(block);
+            // Per-block working_dir overrides frontmatter default
+            let working_dir = block
+                .working_dir
+                .as_ref()
+                .map(PathBuf::from)
+                .or_else(|| default_working_dir.clone());
             VerificationItem {
                 command,
-                working_dir: None,
+                working_dir,
                 expected_exit_code: Some(0),
                 expected_output,
                 timeout_secs: Some(DEFAULT_TIMEOUT_SECS),
+                env_vars: block.env_vars.clone(),
             }
         })
         .collect();
@@ -207,6 +224,11 @@ fn run_single_verification(item: &VerificationItem) -> VerificationResult {
 
     if let Some(ref working_dir) = item.working_dir {
         cmd.current_dir(working_dir);
+    }
+
+    // Set environment variables
+    for (key, value) in &item.env_vars {
+        cmd.env(key, value);
     }
 
     cmd.stdout(Stdio::piped());
@@ -318,6 +340,7 @@ mod tests {
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -336,6 +359,7 @@ mod tests {
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -352,6 +376,7 @@ mod tests {
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(1),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -368,6 +393,7 @@ mod tests {
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -384,6 +410,7 @@ mod tests {
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -400,6 +427,7 @@ mod tests {
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -417,6 +445,7 @@ mod tests {
             expected_exit_code: Some(42),
             expected_output: None,
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -433,6 +462,7 @@ mod tests {
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Contains("world".to_string())),
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -448,6 +478,7 @@ mod tests {
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Contains("foo".to_string())),
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -463,6 +494,7 @@ mod tests {
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -587,6 +619,7 @@ echo "second"
                     expected_exit_code: Some(0),
                     expected_output: None,
                     timeout_secs: Some(5),
+                    env_vars: Vec::new(),
                 },
                 VerificationItem {
                     command: "echo 'second'".to_string(),
@@ -594,6 +627,7 @@ echo "second"
                     expected_exit_code: Some(0),
                     expected_output: None,
                     timeout_secs: Some(5),
+                    env_vars: Vec::new(),
                 },
             ],
         };
@@ -615,6 +649,7 @@ echo "second"
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Contains("Hello, World!".to_string())),
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -634,6 +669,7 @@ echo "second"
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Regex(r"test \d+ passed".to_string())),
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -649,6 +685,7 @@ echo "second"
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Regex(r"test \d+ passed".to_string())),
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -664,6 +701,7 @@ echo "second"
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Exact("hello".to_string())),
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -679,6 +717,7 @@ echo "second"
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Exact("hello".to_string())),
             timeout_secs: Some(5),
+            env_vars: Vec::new(),
         };
 
         let result = run_single_verification(&item);
@@ -740,5 +779,162 @@ test result: ok\. \d+ passed
             Some(OutputMatcher::Regex(s)) => assert!(s.contains(r"\d+")),
             _ => panic!("Expected Regex matcher"),
         }
+    }
+
+    #[test]
+    fn test_extract_verification_spec_with_working_dir_from_frontmatter() {
+        let content = r#"---
+paver:
+  working_dir: packages/api
+---
+# API Tests
+
+## Verification
+```bash
+npm test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let spec = extract_verification_spec(&doc);
+
+        assert!(spec.is_some());
+        let spec = spec.unwrap();
+        assert_eq!(spec.items.len(), 1);
+
+        let item = &spec.items[0];
+        assert_eq!(item.working_dir, Some(PathBuf::from("packages/api")));
+    }
+
+    #[test]
+    fn test_extract_verification_spec_with_inline_working_dir() {
+        let content = r#"# API Tests
+
+## Verification
+<!-- paver:working_dir src/tests -->
+```bash
+cargo test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let spec = extract_verification_spec(&doc);
+
+        assert!(spec.is_some());
+        let spec = spec.unwrap();
+        assert_eq!(spec.items.len(), 1);
+
+        let item = &spec.items[0];
+        assert_eq!(item.working_dir, Some(PathBuf::from("src/tests")));
+    }
+
+    #[test]
+    fn test_extract_verification_spec_inline_overrides_frontmatter() {
+        let content = r#"---
+paver:
+  working_dir: default/path
+---
+# API Tests
+
+## Verification
+<!-- paver:working_dir override/path -->
+```bash
+npm test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let spec = extract_verification_spec(&doc);
+
+        assert!(spec.is_some());
+        let spec = spec.unwrap();
+        assert_eq!(spec.items.len(), 1);
+
+        // Inline working_dir should override frontmatter
+        let item = &spec.items[0];
+        assert_eq!(item.working_dir, Some(PathBuf::from("override/path")));
+    }
+
+    #[test]
+    fn test_extract_verification_spec_with_env_vars() {
+        let content = r#"# API Tests
+
+## Verification
+<!-- paver:env TEST_DB=sqlite -->
+<!-- paver:env DEBUG=true -->
+```bash
+cargo test
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let spec = extract_verification_spec(&doc);
+
+        assert!(spec.is_some());
+        let spec = spec.unwrap();
+        assert_eq!(spec.items.len(), 1);
+
+        let item = &spec.items[0];
+        assert_eq!(item.env_vars.len(), 2);
+        assert!(
+            item.env_vars
+                .contains(&("TEST_DB".to_string(), "sqlite".to_string()))
+        );
+        assert!(
+            item.env_vars
+                .contains(&("DEBUG".to_string(), "true".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_run_verification_with_env_vars() {
+        let item = VerificationItem {
+            command: "echo $MY_VAR".to_string(),
+            working_dir: None,
+            expected_exit_code: Some(0),
+            expected_output: Some(OutputMatcher::Contains("hello_from_env".to_string())),
+            timeout_secs: Some(5),
+            env_vars: vec![("MY_VAR".to_string(), "hello_from_env".to_string())],
+        };
+
+        let result = run_single_verification(&item);
+
+        assert!(result.passed);
+        assert!(result.stdout.contains("hello_from_env"));
+    }
+
+    #[test]
+    fn test_frontmatter_working_dir_applies_to_all_blocks() {
+        let content = r#"---
+paver:
+  working_dir: packages/shared
+---
+# Shared Tests
+
+## Verification
+```bash
+echo first
+```
+```bash
+echo second
+```
+"#;
+
+        let doc = ParsedDoc::parse_content(PathBuf::from("test.md"), content).unwrap();
+        let spec = extract_verification_spec(&doc);
+
+        assert!(spec.is_some());
+        let spec = spec.unwrap();
+        assert_eq!(spec.items.len(), 2);
+
+        // Both items should have the frontmatter working_dir
+        assert_eq!(
+            spec.items[0].working_dir,
+            Some(PathBuf::from("packages/shared"))
+        );
+        assert_eq!(
+            spec.items[1].working_dir,
+            Some(PathBuf::from("packages/shared"))
+        );
     }
 }

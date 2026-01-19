@@ -76,6 +76,12 @@ pub struct CommandResult {
     /// Output mismatch details (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_mismatch: Option<OutputMismatch>,
+    /// Working directory used for the command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<PathBuf>,
+    /// Environment variables set for the command.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub env_vars: Vec<(String, String)>,
 }
 
 /// Result of verifying a single document.
@@ -281,6 +287,8 @@ fn run_verification(
                     stderr: None,
                     duration_ms: None,
                     output_mismatch: None,
+                    working_dir: remaining.working_dir.clone(),
+                    env_vars: remaining.env_vars.clone(),
                 });
             }
             break;
@@ -329,14 +337,25 @@ fn run_command(
     // Use item's working_dir if specified, otherwise use config_dir
     let cmd_working_dir = item.working_dir.as_deref().unwrap_or(working_dir);
 
-    // Execute command via shell
-    let output = Command::new("sh")
-        .arg("-c")
+    // Build the command
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
         .arg(&item.command)
-        .current_dir(cmd_working_dir)
-        .output();
+        .current_dir(cmd_working_dir);
+
+    // Set environment variables
+    for (key, value) in &item.env_vars {
+        cmd.env(key, value);
+    }
+
+    // Execute command via shell
+    let output = cmd.output();
 
     let duration_ms = start.elapsed().as_millis() as u64;
+
+    // Track the working dir and env vars for the result (only if non-default)
+    let result_working_dir = item.working_dir.clone();
+    let result_env_vars = item.env_vars.clone();
 
     match output {
         Ok(output) => {
@@ -355,6 +374,8 @@ fn run_command(
                     stderr: Some(stderr),
                     duration_ms: Some(duration_ms),
                     output_mismatch: None,
+                    working_dir: result_working_dir,
+                    env_vars: result_env_vars,
                 };
             }
 
@@ -380,6 +401,8 @@ fn run_command(
                     },
                     duration_ms: Some(duration_ms),
                     output_mismatch: None,
+                    working_dir: result_working_dir,
+                    env_vars: result_env_vars,
                 };
             }
 
@@ -428,6 +451,8 @@ fn run_command(
                 },
                 duration_ms: Some(duration_ms),
                 output_mismatch,
+                working_dir: result_working_dir,
+                env_vars: result_env_vars,
             }
         }
         Err(e) => CommandResult {
@@ -439,6 +464,8 @@ fn run_command(
             stderr: Some(format!("Failed to execute command: {}", e)),
             duration_ms: Some(duration_ms),
             output_mismatch: None,
+            working_dir: result_working_dir,
+            env_vars: result_env_vars,
         },
     }
 }
@@ -504,6 +531,22 @@ fn collect_markdown_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Res
     Ok(())
 }
 
+/// Print a debugging suggestion for a failed command.
+fn print_debug_suggestion(cmd: &CommandResult) {
+    println!("    suggestion: Try running manually:");
+    let mut suggestion = String::new();
+    // Add env vars
+    for (key, value) in &cmd.env_vars {
+        suggestion.push_str(&format!("{}={} ", key, value));
+    }
+    // Add cd if working_dir is set
+    if let Some(ref wd) = cmd.working_dir {
+        suggestion.push_str(&format!("cd {} && ", wd.display()));
+    }
+    suggestion.push_str(&cmd.command);
+    println!("      {}", suggestion);
+}
+
 /// Truncate a string to a maximum number of lines.
 fn truncate_lines(s: &str, max_lines: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
@@ -542,39 +585,51 @@ fn output_text(results: &VerifyResults) {
 
             // Show failure details
             if cmd.status == VerifyStatus::Fail || cmd.status == VerifyStatus::Timeout {
-                if let Some(code) = cmd.exit_code {
-                    if code != cmd.expected_exit_code {
-                        println!(
-                            "    exit code: {} (expected {})",
-                            code, cmd.expected_exit_code
-                        );
+                // Show working directory if specified
+                if let Some(ref wd) = cmd.working_dir {
+                    println!("    working_dir: {}", wd.display());
+                }
+                // Show environment variables if any
+                if !cmd.env_vars.is_empty() {
+                    for (key, value) in &cmd.env_vars {
+                        println!("    env: {}={}", key, value);
                     }
+                }
+                if let Some(code) = cmd.exit_code
+                    && code != cmd.expected_exit_code
+                {
+                    println!(
+                        "    exit code: {} (expected {})",
+                        code, cmd.expected_exit_code
+                    );
                 }
                 // Always show stdout/stderr for failed commands to aid debugging
-                if let Some(stdout) = &cmd.stdout {
-                    if !stdout.is_empty() {
-                        let lines: Vec<&str> = stdout.lines().collect();
-                        println!("    stdout:");
-                        for line in lines.iter().take(10) {
-                            println!("      {}", line);
-                        }
-                        if lines.len() > 10 {
-                            println!("      ... ({} more lines)", lines.len() - 10);
-                        }
+                if let Some(stdout) = &cmd.stdout
+                    && !stdout.is_empty()
+                {
+                    let lines: Vec<&str> = stdout.lines().collect();
+                    println!("    stdout:");
+                    for line in lines.iter().take(10) {
+                        println!("      {}", line);
+                    }
+                    if lines.len() > 10 {
+                        println!("      ... ({} more lines)", lines.len() - 10);
                     }
                 }
-                if let Some(stderr) = &cmd.stderr {
-                    if !stderr.is_empty() {
-                        let lines: Vec<&str> = stderr.lines().collect();
-                        println!("    stderr:");
-                        for line in lines.iter().take(10) {
-                            println!("      {}", line);
-                        }
-                        if lines.len() > 10 {
-                            println!("      ... ({} more lines)", lines.len() - 10);
-                        }
+                if let Some(stderr) = &cmd.stderr
+                    && !stderr.is_empty()
+                {
+                    let lines: Vec<&str> = stderr.lines().collect();
+                    println!("    stderr:");
+                    for line in lines.iter().take(10) {
+                        println!("      {}", line);
+                    }
+                    if lines.len() > 10 {
+                        println!("      ... ({} more lines)", lines.len() - 10);
                     }
                 }
+                // Print debugging suggestion
+                print_debug_suggestion(cmd);
             }
 
             // Show output mismatch details for both warnings and failures
@@ -814,6 +869,8 @@ Example here.
             stderr: None,
             duration_ms: Some(10),
             output_mismatch: None,
+            working_dir: None,
+            env_vars: Vec::new(),
         });
         assert!(doc_result.is_success());
 
@@ -826,6 +883,8 @@ Example here.
             stderr: None,
             duration_ms: Some(5),
             output_mismatch: None,
+            working_dir: None,
+            env_vars: Vec::new(),
         });
         assert!(!doc_result.is_success());
     }
@@ -850,6 +909,8 @@ Example here.
             stderr: None,
             duration_ms: Some(10),
             output_mismatch: None,
+            working_dir: None,
+            env_vars: Vec::new(),
         });
 
         doc_result.add_result(CommandResult {
@@ -861,6 +922,8 @@ Example here.
             stderr: None,
             duration_ms: Some(5),
             output_mismatch: None,
+            working_dir: None,
+            env_vars: Vec::new(),
         });
 
         results.add_document(doc_result);
@@ -880,6 +943,7 @@ Example here.
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(30),
+            env_vars: Vec::new(),
         };
 
         let result = run_command(
@@ -891,12 +955,7 @@ Example here.
 
         assert_eq!(result.status, VerifyStatus::Pass);
         assert_eq!(result.exit_code, Some(0));
-        assert!(
-            result
-                .stdout
-                .as_ref()
-                .map_or(false, |s| s.contains("hello"))
-        );
+        assert!(result.stdout.as_ref().is_some_and(|s| s.contains("hello")));
     }
 
     #[test]
@@ -907,6 +966,7 @@ Example here.
             expected_exit_code: Some(0),
             expected_output: None,
             timeout_secs: Some(30),
+            env_vars: Vec::new(),
         };
 
         let result = run_command(
@@ -929,6 +989,7 @@ Example here.
             expected_exit_code: Some(1),
             expected_output: None,
             timeout_secs: Some(30),
+            env_vars: Vec::new(),
         };
 
         let result = run_command(
@@ -961,6 +1022,8 @@ Example here.
             stderr: None,
             duration_ms: Some(10),
             output_mismatch: None,
+            working_dir: None,
+            env_vars: Vec::new(),
         });
         results.add_document(doc_result);
 
@@ -1105,6 +1168,7 @@ Example here.
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Contains("expected".to_string())),
             timeout_secs: Some(30),
+            env_vars: Vec::new(),
         };
 
         let result = run_command(
@@ -1130,6 +1194,7 @@ Example here.
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Contains("expected".to_string())),
             timeout_secs: Some(30),
+            env_vars: Vec::new(),
         };
 
         let result = run_command(
@@ -1151,6 +1216,7 @@ Example here.
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Contains("expected".to_string())),
             timeout_secs: Some(30),
+            env_vars: Vec::new(),
         };
 
         let result = run_command(
@@ -1172,6 +1238,7 @@ Example here.
             expected_exit_code: Some(0),
             expected_output: Some(OutputMatcher::Contains("hello".to_string())),
             timeout_secs: Some(30),
+            env_vars: Vec::new(),
         };
 
         let result = run_command(
@@ -1207,6 +1274,8 @@ Example here.
                 strategy: "contains".to_string(),
                 actual: "actual".to_string(),
             }),
+            working_dir: None,
+            env_vars: Vec::new(),
         });
 
         // Warn is still considered success
@@ -1235,6 +1304,8 @@ Example here.
             stderr: None,
             duration_ms: Some(10),
             output_mismatch: None,
+            working_dir: None,
+            env_vars: Vec::new(),
         });
 
         doc_result.add_result(CommandResult {
@@ -1250,6 +1321,8 @@ Example here.
                 strategy: "contains".to_string(),
                 actual: "actual".to_string(),
             }),
+            working_dir: None,
+            env_vars: Vec::new(),
         });
 
         results.add_document(doc_result);
