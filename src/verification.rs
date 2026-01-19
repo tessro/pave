@@ -658,7 +658,7 @@ echo "second"
         assert_eq!(result.exit_code, Some(0));
         assert!(result.stdout.contains("Hello, World!"));
         assert!(result.error.is_none());
-        assert!(result.duration_ms > 0);
+        // Note: duration_ms may be 0 on very fast systems where echo completes in under 1ms
     }
 
     #[test]
