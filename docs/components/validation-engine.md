@@ -178,3 +178,10 @@ paver check --format json | jq '.errors | length'
 **Why markdown over RST/AsciiDoc?** Markdown is the most widely supported format, requires no special tooling to read, and agents are well-trained on it.
 
 **Why case-insensitive sections?** Reduces friction and validation failures from minor formatting differences while maintaining structural requirements.
+
+## Paths
+
+- `src/parser.rs`
+- `src/rules.rs`
+- `src/config.rs`
+- `src/commands/check.rs`

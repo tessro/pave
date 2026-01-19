@@ -25,3 +25,7 @@
 ## Decisions
 <!-- Why does this design exist? What must not change? -->
 <!-- Tradeoffs and constraints. -->
+
+## Paths
+<!-- Code paths this doc covers (used by `paver changed`). -->
+<!-- Use glob patterns: src/foo.rs, src/bar/*.rs, src/**/*.ts -->

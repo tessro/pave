@@ -108,6 +108,31 @@ pub enum Command {
         #[arg(short, long)]
         update: bool,
     },
+
+    /// Show docs impacted by code changes
+    Changed {
+        /// Git ref to compare against [default: HEAD~1 or origin/main]
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Output format: text, json
+        #[arg(long, default_value = "text", value_enum)]
+        format: ChangedOutputFormat,
+
+        /// Fail if impacted docs weren't updated
+        #[arg(long)]
+        strict: bool,
+    },
+}
+
+/// Output format for the `paver changed` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum ChangedOutputFormat {
+    /// Human-readable text output
+    #[default]
+    Text,
+    /// JSON output for programmatic use
+    Json,
 }
 
 #[derive(Subcommand)]

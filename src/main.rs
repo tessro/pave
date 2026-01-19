@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use paver::cli::{Cli, Command, ConfigCommand, DocType, HooksCommand, PromptOutputFormat};
+use paver::commands::changed::{self, ChangedArgs};
 use paver::commands::check::{self, CheckArgs};
 use paver::commands::config;
 use paver::commands::hooks;
@@ -96,6 +97,17 @@ fn main() -> Result<()> {
         },
         Command::Index { output, update } => {
             index::run(&output, update)?;
+        }
+        Command::Changed {
+            base,
+            format,
+            strict,
+        } => {
+            changed::execute(ChangedArgs {
+                base,
+                format,
+                strict,
+            })?;
         }
     }
 

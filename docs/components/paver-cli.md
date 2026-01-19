@@ -18,6 +18,7 @@ Paver is a command-line tool for creating, validating, and managing PAVED docume
 | `paver check [path]` | Validate documentation against PAVED rules |
 | `paver index` | Generate documentation index |
 | `paver prompt <type>` | Generate AI prompts for documentation tasks |
+| `paver changed` | Show docs impacted by code changes |
 | `paver config <subcommand>` | View or modify configuration |
 | `paver hooks <subcommand>` | Manage git hooks for validation |
 
@@ -75,6 +76,14 @@ paver config path
 - `set`: Update a config value
 - `list`: Show all configuration
 - `path`: Show config file path
+
+**paver changed**
+```bash
+paver changed [--base <ref>] [--format <format>] [--strict]
+```
+- `--base`: Git ref to compare against (default: `origin/main`, `origin/master`, or `HEAD~1`)
+- `--format`: Output format (`text` or `json`)
+- `--strict`: Fail if impacted docs weren't updated
 
 **paver hooks**
 ```bash
@@ -186,6 +195,21 @@ paver index --update
 paver index --output docs/README.md
 ```
 
+### Check impacted docs
+```bash
+# Show docs impacted by code changes since origin/main
+paver changed
+
+# Compare against a specific branch or commit
+paver changed --base feature-branch
+
+# JSON output for CI integration
+paver changed --format json
+
+# Fail in CI if impacted docs weren't updated
+paver changed --strict
+```
+
 ## Gotchas
 
 - **Config not found**: Paver looks for `.paver.toml` in the current directory and parent directories. Run `paver init` to create one, or use `paver config path` to see where it's looking.
@@ -203,3 +227,9 @@ paver index --output docs/README.md
 **Why built-in templates?** Embedded templates ensure paver works out of the box. Custom templates can override them when teams need project-specific formats.
 
 **Why strict section requirements?** The `Verification` and `Examples` requirements enforce documentation quality. Docs without these sections are less useful for both humans and AI agents.
+
+## Paths
+
+- `src/cli.rs`
+- `src/main.rs`
+- `src/commands/*.rs`
