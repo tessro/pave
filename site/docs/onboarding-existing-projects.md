@@ -196,6 +196,37 @@ Hooks provide immediate feedback when editing docs. You'll catch:
 - Documents exceeding line limits
 - Broken verification commands (with `--verify`)
 
+### Using Lefthook
+
+If your project uses [Lefthook](https://github.com/evilmartians/lefthook) to manage git hooks, add pave to your `lefthook.yml` instead of using `pave hooks install`:
+
+```yaml
+# lefthook.yml
+pre-commit:
+  commands:
+    pave-check:
+      glob: "docs/**/*.md"
+      run: pave check --changed
+```
+
+The `glob` pattern controls which file changes trigger the hook. Adjust `docs/**/*.md` to match your documentation path configured in `.pave.toml`.
+
+To also run verification commands:
+
+```yaml
+# lefthook.yml
+pre-commit:
+  commands:
+    pave-check:
+      glob: "docs/**/*.md"
+      run: pave check --changed
+    pave-verify:
+      glob: "docs/**/*.md"
+      run: pave verify --changed --keep-going
+```
+
+After adding the configuration, run `lefthook install` to set up the hooks.
+
 ## Step 6: Track Progress Toward Strict Mode
 
 Monitor your documentation health with:
