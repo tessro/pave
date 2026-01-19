@@ -19,6 +19,14 @@ paver is a CLI tool for creating, validating, and managing **PAVED** documentati
 | `paver index` | Generate documentation index |
 | `paver check` | Validate documents against rules |
 | `paver config` | Manage configuration |
+| `paver adopt` | Scan existing docs to help onboard |
+
+## Guides 📖
+
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](/docs/getting-started/) | Set up paver in a new project |
+| [Onboarding Existing Projects](/docs/onboarding-existing-projects/) | Adopt paver in an existing codebase |
 
 ## Document Types 📑
 

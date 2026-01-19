@@ -90,3 +90,4 @@ paver config set rules.max_lines 500
 - Read the [Manifesto](/docs/manifesto/) to understand the philosophy
 - Explore [Commands](/docs/commands/) for full CLI reference
 - Check out the templates in `templates/` for customization
+- Have existing docs? See [Onboarding Existing Projects](/docs/onboarding-existing-projects/) for adoption guidance
