@@ -204,6 +204,20 @@ fn collect_markdown_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Res
 fn check_file(path: &Path, config: &PaverConfig, results: &mut CheckResults) -> Result<()> {
     let doc = ParsedDoc::parse(path)?;
 
+    // Skip validation of index.md files - they are navigation documents
+    // that don't need Verification and Examples sections
+    if let Some(file_name) = path.file_name() {
+        if file_name == "index.md" {
+            return Ok(());
+        }
+    }
+
+    // Skip template files - they are scaffolds, not actual documentation
+    let path_str = path.to_string_lossy();
+    if path_str.contains("/templates/") || path_str.contains("\\templates\\") {
+        return Ok(());
+    }
+
     // Check max lines
     if doc.line_count > config.rules.max_lines as usize {
         results.add_issue(Issue {
@@ -517,5 +531,45 @@ This document is missing required sections.
         assert_eq!(parsed["errors"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["errors"][0]["severity"], "error");
         assert_eq!(parsed["errors"][0]["message"], "Test error");
+    }
+
+    #[test]
+    fn check_skips_index_md_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir);
+        let docs_dir = temp_dir.path().join("docs");
+        fs::create_dir_all(&docs_dir).unwrap();
+
+        // Create an index.md without required sections
+        let index_content = "# Documentation Index\n\nJust navigation links here.\n";
+        fs::write(docs_dir.join("index.md"), index_content).unwrap();
+
+        let config = PaverConfig::load(&config_path).unwrap();
+        let mut results = CheckResults::new();
+        check_file(&docs_dir.join("index.md"), &config, &mut results).unwrap();
+
+        // index.md should be skipped - no errors reported
+        assert!(results.errors.is_empty());
+        assert!(results.warnings.is_empty());
+    }
+
+    #[test]
+    fn check_skips_template_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir);
+        let templates_dir = temp_dir.path().join("docs").join("templates");
+        fs::create_dir_all(&templates_dir).unwrap();
+
+        // Create a template without required sections
+        let template_content = "# {Component Name}\n\n## Purpose\n\nDescribe here.\n";
+        fs::write(templates_dir.join("component.md"), template_content).unwrap();
+
+        let config = PaverConfig::load(&config_path).unwrap();
+        let mut results = CheckResults::new();
+        check_file(&templates_dir.join("component.md"), &config, &mut results).unwrap();
+
+        // Template files should be skipped - no errors reported
+        assert!(results.errors.is_empty());
+        assert!(results.warnings.is_empty());
     }
 }

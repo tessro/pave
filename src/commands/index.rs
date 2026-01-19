@@ -135,6 +135,10 @@ fn scan_docs_recursive(docs_root: &Path, current: &Path, docs: &mut Vec<DocInfo>
         let path = entry.path();
 
         if path.is_dir() {
+            // Skip the templates directory - these are scaffolds, not actual documentation
+            if path.file_name().is_some_and(|n| n == "templates") {
+                continue;
+            }
             scan_docs_recursive(docs_root, &path, docs)?;
         } else if path.extension().is_some_and(|ext| ext == "md") {
             // Skip the index file itself
