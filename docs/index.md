@@ -11,6 +11,7 @@
 | Component | Purpose |
 |-----------|----------|
 | [Paver CLI](./components/paver-cli.md) | Command-line tool for creating, validating, and managing PAVED documentation. |
+| [Configuration](./components/configuration.md) | Manages `.paver.toml` settings for documentation paths, validation rules, and templates. |
 | [Verification](./components/verification.md) | Runs verification commands from documentation to ensure docs stay accurate. |
 | [Code Mapping](./components/code-mapping.md) | Links documentation to source code files for change detection. |
 | [Validation Engine](./components/validation-engine.md) | Parses and validates markdown files against PAVED rules. |
