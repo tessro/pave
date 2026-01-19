@@ -50,14 +50,14 @@ Prerequisites: Install the Rust toolchain via [rustup](https://rustup.rs/).
 Verify the Rust implementation is working correctly:
 
 ```bash
-# Build paver
-cargo build --release
+# Build paver (optional, cargo run will build automatically)
+cargo build
 
 # Run the test suite
 cargo test
 
 # Check the binary works
-./target/release/paver --version
+cargo run -- --version
 ```
 
 Expected: All tests pass, binary outputs version information.

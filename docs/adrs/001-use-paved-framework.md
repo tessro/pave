@@ -82,16 +82,13 @@ Python documentation generator using reStructuredText.
 
 ## Verification
 
-Prerequisites: Build paver with `cargo build --release`
+Prerequisites: Install the Rust toolchain via [rustup](https://rustup.rs/).
 
 Verify the PAVED framework is properly configured:
 
 ```bash
-# Check paver is available and configured
-./target/release/paver config list
-
 # Validate all documentation follows PAVED rules
-./target/release/paver check
+cargo run -- check
 ```
 
 Expected: All checks pass with no errors.
@@ -102,7 +99,7 @@ Expected: All checks pass with no errors.
 
 ```bash
 # Generate a new component document
-./target/release/paver new component "Authentication Service"
+cargo run -- new component "Authentication Service"
 
 # This creates docs/authentication-service.md with PAVED sections
 ```
@@ -111,13 +108,13 @@ Expected: All checks pass with no errors.
 
 ```bash
 # Check a specific file
-./target/release/paver check docs/adrs/001-use-paved-framework.md
+cargo run -- check docs/adrs/001-use-paved-framework.md
 
 # Check all documentation
-./target/release/paver check
+cargo run -- check
 
 # Strict mode (warnings as errors)
-./target/release/paver check --strict
+cargo run -- check --strict
 ```
 
 ### PAVED Section Example
