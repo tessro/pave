@@ -251,11 +251,40 @@ pub enum Command {
         #[arg(long, default_value = "text", value_enum)]
         format: OutputFormat,
     },
+
+    /// Show documentation status and health overview
+    Status {
+        /// Specific files or directories to check [default: docs root from config]
+        #[arg()]
+        paths: Vec<PathBuf>,
+
+        /// Output format: text, json
+        #[arg(long, default_value = "text", value_enum)]
+        format: StatusOutputFormat,
+
+        /// Only show status for docs changed since base ref
+        #[arg(long)]
+        changed: bool,
+
+        /// Git ref for comparison with --changed [default: origin/main]
+        #[arg(long)]
+        base: Option<String>,
+    },
 }
 
 /// Output format for the `paver changed` command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum ChangedOutputFormat {
+    /// Human-readable text output
+    #[default]
+    Text,
+    /// JSON output for programmatic use
+    Json,
+}
+
+/// Output format for the `paver status` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum StatusOutputFormat {
     /// Human-readable text output
     #[default]
     Text,

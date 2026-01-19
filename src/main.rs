@@ -16,6 +16,7 @@ use paver::commands::init;
 use paver::commands::lint::{self, LintArgs};
 use paver::commands::new::{self, NewArgs};
 use paver::commands::prompt::{generate_prompt, OutputFormat, PromptOptions};
+use paver::commands::status::{self, StatusArgs};
 use paver::commands::verify::{self, VerifyArgs};
 use paver::templates::TemplateType;
 
@@ -198,6 +199,19 @@ fn main() -> Result<()> {
         }
         Command::Doctor { paths, format } => {
             doctor::execute(DoctorArgs { paths, format })?;
+        }
+        Command::Status {
+            paths,
+            format,
+            changed,
+            base,
+        } => {
+            status::execute(StatusArgs {
+                paths,
+                format,
+                changed,
+                base,
+            })?;
         }
     }
 

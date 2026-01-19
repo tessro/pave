@@ -13,4 +13,5 @@ pub mod init;
 pub mod lint;
 pub mod new;
 pub mod prompt;
+pub mod status;
 pub mod verify;
