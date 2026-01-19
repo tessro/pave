@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
-use paver::cli::{Cli, Command};
+use paver::cli::{Cli, Command, ConfigCommand};
+use paver::commands::config;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -21,9 +22,20 @@ fn main() -> Result<()> {
         Command::Hooks => {
             println!("paver hooks: not yet implemented");
         }
-        Command::Config => {
-            println!("paver config: not yet implemented");
-        }
+        Command::Config(cmd) => match cmd {
+            ConfigCommand::Get { key } => {
+                config::get(&key)?;
+            }
+            ConfigCommand::Set { key, value } => {
+                config::set(&key, &value)?;
+            }
+            ConfigCommand::List => {
+                config::list()?;
+            }
+            ConfigCommand::Path => {
+                config::path()?;
+            }
+        },
         Command::Index => {
             println!("paver index: not yet implemented");
         }

@@ -27,8 +27,32 @@ pub enum Command {
     Hooks,
 
     /// View or modify paver configuration
-    Config,
+    #[command(subcommand)]
+    Config(ConfigCommand),
 
     /// Generate an index document
     Index,
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCommand {
+    /// Get a config value
+    Get {
+        /// The key to get (e.g., docs.root, rules.max_lines)
+        key: String,
+    },
+
+    /// Set a config value
+    Set {
+        /// The key to set (e.g., docs.root, rules.max_lines)
+        key: String,
+        /// The value to set
+        value: String,
+    },
+
+    /// List all config values
+    List,
+
+    /// Print path to config file
+    Path,
 }
