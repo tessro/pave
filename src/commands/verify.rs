@@ -1,6 +1,7 @@
 //! Implementation of the `paver verify` command for running verification commands.
 
 use anyhow::{Context, Result};
+use regex::Regex;
 use serde::Serialize;
 use std::env;
 use std::io::Write;
@@ -9,9 +10,11 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::cli::OutputFormat;
-use crate::config::{CONFIG_FILENAME, PaverConfig};
+use crate::config::{CONFIG_FILENAME, PaverConfig, RulesSection};
 use crate::parser::ParsedDoc;
-use crate::verification::{VerificationItem, VerificationSpec, extract_verification_spec};
+use crate::verification::{
+    OutputMatcher, VerificationItem, VerificationSpec, extract_verification_spec,
+};
 
 /// Arguments for the `paver verify` command.
 pub struct VerifyArgs {
@@ -32,9 +35,21 @@ pub struct VerifyArgs {
 #[serde(rename_all = "lowercase")]
 pub enum VerifyStatus {
     Pass,
+    Warn,
     Fail,
     Timeout,
     Skipped,
+}
+
+/// Details about an output mismatch.
+#[derive(Debug, Clone, Serialize)]
+pub struct OutputMismatch {
+    /// The expected output pattern.
+    pub expected: String,
+    /// The match strategy used (contains, regex, exact).
+    pub strategy: String,
+    /// The actual output received.
+    pub actual: String,
 }
 
 /// Result of running a single verification command.
@@ -58,6 +73,9 @@ pub struct CommandResult {
     /// Duration in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// Output mismatch details (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_mismatch: Option<OutputMismatch>,
 }
 
 /// Result of verifying a single document.
@@ -84,14 +102,25 @@ impl DocumentResult {
     }
 
     fn add_result(&mut self, result: CommandResult) {
-        if result.status != VerifyStatus::Pass {
-            self.status = result.status;
+        // Fail/Timeout always override other statuses
+        // Warn only upgrades from Pass
+        match result.status {
+            VerifyStatus::Fail | VerifyStatus::Timeout => {
+                self.status = result.status;
+            }
+            VerifyStatus::Warn => {
+                if self.status == VerifyStatus::Pass {
+                    self.status = VerifyStatus::Warn;
+                }
+            }
+            VerifyStatus::Pass | VerifyStatus::Skipped => {}
         }
         self.commands.push(result);
     }
 
     fn is_success(&self) -> bool {
-        self.status == VerifyStatus::Pass
+        // Pass and Warn are both considered success (warnings don't fail verification)
+        self.status == VerifyStatus::Pass || self.status == VerifyStatus::Warn
     }
 }
 
@@ -104,6 +133,8 @@ pub struct VerifyResults {
     pub commands_executed: usize,
     /// Number of commands that passed.
     pub commands_passed: usize,
+    /// Number of commands that had warnings (output mismatch but not strict).
+    pub commands_warned: usize,
     /// Number of commands that failed.
     pub commands_failed: usize,
     /// Results per document.
@@ -116,6 +147,7 @@ impl VerifyResults {
             documents_verified: 0,
             commands_executed: 0,
             commands_passed: 0,
+            commands_warned: 0,
             commands_failed: 0,
             documents: Vec::new(),
         }
@@ -124,10 +156,11 @@ impl VerifyResults {
     fn add_document(&mut self, doc_result: DocumentResult) {
         for cmd in &doc_result.commands {
             self.commands_executed += 1;
-            if cmd.status == VerifyStatus::Pass {
-                self.commands_passed += 1;
-            } else if cmd.status != VerifyStatus::Skipped {
-                self.commands_failed += 1;
+            match cmd.status {
+                VerifyStatus::Pass => self.commands_passed += 1,
+                VerifyStatus::Warn => self.commands_warned += 1,
+                VerifyStatus::Fail | VerifyStatus::Timeout => self.commands_failed += 1,
+                VerifyStatus::Skipped => {}
             }
         }
         self.documents_verified += 1;
@@ -180,7 +213,8 @@ pub fn execute(args: VerifyArgs) -> Result<()> {
     let timeout = Duration::from_secs(args.timeout as u64);
 
     for spec in &specs {
-        let doc_result = run_verification(spec, timeout, args.keep_going, config_dir)?;
+        let doc_result =
+            run_verification(spec, timeout, args.keep_going, config_dir, &config.rules)?;
         let should_stop = !doc_result.is_success() && !args.keep_going;
         results.add_document(doc_result);
 
@@ -224,12 +258,15 @@ fn run_verification(
     timeout: Duration,
     keep_going: bool,
     working_dir: &Path,
+    rules: &RulesSection,
 ) -> Result<DocumentResult> {
     let mut doc_result = DocumentResult::new(spec);
 
     for item in &spec.items {
-        let cmd_result = run_command(item, timeout, working_dir);
-        let is_failure = cmd_result.status != VerifyStatus::Pass;
+        let cmd_result = run_command(item, timeout, working_dir, rules);
+        // Fail/Timeout stop execution unless keep_going; Warn does not stop execution
+        let is_failure =
+            cmd_result.status == VerifyStatus::Fail || cmd_result.status == VerifyStatus::Timeout;
         doc_result.add_result(cmd_result);
 
         if is_failure && !keep_going {
@@ -243,6 +280,7 @@ fn run_verification(
                     stdout: None,
                     stderr: None,
                     duration_ms: None,
+                    output_mismatch: None,
                 });
             }
             break;
@@ -252,8 +290,39 @@ fn run_verification(
     Ok(doc_result)
 }
 
+/// Check if the output matches the expected pattern.
+/// Returns (matches, strategy_name) tuple.
+fn check_output_match(matcher: &OutputMatcher, stdout: &str) -> (bool, &'static str) {
+    match matcher {
+        OutputMatcher::Contains(substring) => (stdout.contains(substring), "contains"),
+        OutputMatcher::Regex(pattern) => {
+            let matches = Regex::new(pattern)
+                .map(|re| re.is_match(stdout))
+                .unwrap_or(false);
+            (matches, "regex")
+        }
+        OutputMatcher::Exact(expected) => (stdout.trim() == expected.trim(), "exact"),
+        OutputMatcher::ExitCodeOnly => (true, "exit_code_only"),
+    }
+}
+
+/// Get the expected string from an OutputMatcher.
+fn get_expected_string(matcher: &OutputMatcher) -> String {
+    match matcher {
+        OutputMatcher::Contains(s) => s.clone(),
+        OutputMatcher::Regex(s) => s.clone(),
+        OutputMatcher::Exact(s) => s.clone(),
+        OutputMatcher::ExitCodeOnly => String::new(),
+    }
+}
+
 /// Run a single verification command.
-fn run_command(item: &VerificationItem, timeout: Duration, working_dir: &Path) -> CommandResult {
+fn run_command(
+    item: &VerificationItem,
+    timeout: Duration,
+    working_dir: &Path,
+    rules: &RulesSection,
+) -> CommandResult {
     let expected_exit_code = item.expected_exit_code.unwrap_or(0);
     let start = std::time::Instant::now();
 
@@ -285,14 +354,61 @@ fn run_command(item: &VerificationItem, timeout: Duration, working_dir: &Path) -
                     stdout: Some(stdout),
                     stderr: Some(stderr),
                     duration_ms: Some(duration_ms),
+                    output_mismatch: None,
                 };
             }
 
-            // Check exit code
-            let status = if exit_code == Some(expected_exit_code) {
-                VerifyStatus::Pass
+            // Check exit code first
+            let exit_code_matches = exit_code == Some(expected_exit_code);
+
+            // If exit code doesn't match, fail immediately
+            if !exit_code_matches {
+                return CommandResult {
+                    command: item.command.clone(),
+                    status: VerifyStatus::Fail,
+                    exit_code,
+                    expected_exit_code,
+                    stdout: if stdout.is_empty() {
+                        None
+                    } else {
+                        Some(stdout)
+                    },
+                    stderr: if stderr.is_empty() {
+                        None
+                    } else {
+                        Some(stderr)
+                    },
+                    duration_ms: Some(duration_ms),
+                    output_mismatch: None,
+                };
+            }
+
+            // Check output matching if expected_output is specified and not skipped
+            let (status, output_mismatch) = if rules.skip_output_matching {
+                // Skip output matching entirely
+                (VerifyStatus::Pass, None)
+            } else if let Some(ref matcher) = item.expected_output {
+                let (matches, strategy) = check_output_match(matcher, &stdout);
+                if matches {
+                    (VerifyStatus::Pass, None)
+                } else {
+                    // Output doesn't match
+                    let mismatch = OutputMismatch {
+                        expected: get_expected_string(matcher),
+                        strategy: strategy.to_string(),
+                        actual: stdout.clone(),
+                    };
+                    if rules.strict_output_matching {
+                        // Strict mode: fail on mismatch
+                        (VerifyStatus::Fail, Some(mismatch))
+                    } else {
+                        // Default mode: warn on mismatch
+                        (VerifyStatus::Warn, Some(mismatch))
+                    }
+                }
             } else {
-                VerifyStatus::Fail
+                // No expected output, just pass
+                (VerifyStatus::Pass, None)
             };
 
             CommandResult {
@@ -311,6 +427,7 @@ fn run_command(item: &VerificationItem, timeout: Duration, working_dir: &Path) -
                     Some(stderr)
                 },
                 duration_ms: Some(duration_ms),
+                output_mismatch,
             }
         }
         Err(e) => CommandResult {
@@ -321,6 +438,7 @@ fn run_command(item: &VerificationItem, timeout: Duration, working_dir: &Path) -
             stdout: None,
             stderr: Some(format!("Failed to execute command: {}", e)),
             duration_ms: Some(duration_ms),
+            output_mismatch: None,
         },
     }
 }
@@ -386,6 +504,21 @@ fn collect_markdown_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Res
     Ok(())
 }
 
+/// Truncate a string to a maximum number of lines.
+fn truncate_lines(s: &str, max_lines: usize) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    if lines.len() <= max_lines {
+        s.to_string()
+    } else {
+        let mut result: String = lines[..max_lines].join("\n");
+        result.push_str(&format!(
+            "\n    ... ({} more lines)",
+            lines.len() - max_lines
+        ));
+        result
+    }
+}
+
 /// Output results in text format.
 fn output_text(results: &VerifyResults) {
     for doc in &results.documents {
@@ -394,6 +527,7 @@ fn output_text(results: &VerifyResults) {
         for cmd in &doc.commands {
             let status_str = match cmd.status {
                 VerifyStatus::Pass => "PASS",
+                VerifyStatus::Warn => "WARN",
                 VerifyStatus::Fail => "FAIL",
                 VerifyStatus::Timeout => "TIMEOUT",
                 VerifyStatus::Skipped => "SKIPPED",
@@ -408,7 +542,9 @@ fn output_text(results: &VerifyResults) {
 
             // Show failure details
             if cmd.status == VerifyStatus::Fail {
-                if let Some(code) = cmd.exit_code {
+                if let Some(code) = cmd.exit_code
+                    && code != cmd.expected_exit_code
+                {
                     println!(
                         "    exit code: {} (expected {})",
                         code, cmd.expected_exit_code
@@ -421,6 +557,16 @@ fn output_text(results: &VerifyResults) {
                         println!("    stderr: {}", line);
                     }
                 }
+            }
+
+            // Show output mismatch details for both warnings and failures
+            if let Some(ref mismatch) = cmd.output_mismatch {
+                println!("    output mismatch ({}):", mismatch.strategy);
+                println!("      expected: {}", truncate_lines(&mismatch.expected, 3));
+                println!(
+                    "      actual:   {}",
+                    truncate_lines(mismatch.actual.trim(), 5)
+                );
             }
         }
         println!();
@@ -437,7 +583,7 @@ fn output_text(results: &VerifyResults) {
         }
     );
 
-    if results.commands_failed == 0 {
+    if results.commands_failed == 0 && results.commands_warned == 0 {
         println!(
             "{} command{} passed",
             results.commands_passed,
@@ -447,10 +593,15 @@ fn output_text(results: &VerifyResults) {
                 "s"
             }
         );
+    } else if results.commands_failed == 0 {
+        println!(
+            "{} passed, {} warned",
+            results.commands_passed, results.commands_warned
+        );
     } else {
         println!(
-            "{} passed, {} failed",
-            results.commands_passed, results.commands_failed
+            "{} passed, {} warned, {} failed",
+            results.commands_passed, results.commands_warned, results.commands_failed
         );
     }
 }
@@ -469,16 +620,37 @@ fn output_github(results: &VerifyResults) {
             if cmd.status != VerifyStatus::Pass {
                 let level = match cmd.status {
                     VerifyStatus::Fail | VerifyStatus::Timeout => "error",
-                    VerifyStatus::Skipped => "warning",
+                    VerifyStatus::Warn | VerifyStatus::Skipped => "warning",
                     VerifyStatus::Pass => continue,
                 };
 
                 let message = match cmd.status {
                     VerifyStatus::Fail => {
-                        format!(
-                            "Command failed: {} (exit code: {:?}, expected: {})",
-                            cmd.command, cmd.exit_code, cmd.expected_exit_code
-                        )
+                        if let Some(ref mismatch) = cmd.output_mismatch {
+                            format!(
+                                "Output mismatch ({}): expected '{}', got '{}'",
+                                mismatch.strategy,
+                                mismatch.expected.lines().next().unwrap_or(""),
+                                mismatch.actual.trim().lines().next().unwrap_or("")
+                            )
+                        } else {
+                            format!(
+                                "Command failed: {} (exit code: {:?}, expected: {})",
+                                cmd.command, cmd.exit_code, cmd.expected_exit_code
+                            )
+                        }
+                    }
+                    VerifyStatus::Warn => {
+                        if let Some(ref mismatch) = cmd.output_mismatch {
+                            format!(
+                                "Output mismatch ({}): expected '{}', got '{}'",
+                                mismatch.strategy,
+                                mismatch.expected.lines().next().unwrap_or(""),
+                                mismatch.actual.trim().lines().next().unwrap_or("")
+                            )
+                        } else {
+                            format!("Command warning: {}", cmd.command)
+                        }
                     }
                     VerifyStatus::Timeout => {
                         format!("Command timed out: {}", cmd.command)
@@ -571,14 +743,34 @@ Example here.
         path
     }
 
+    fn default_rules() -> RulesSection {
+        RulesSection::default()
+    }
+
+    fn strict_rules() -> RulesSection {
+        RulesSection {
+            strict_output_matching: true,
+            ..RulesSection::default()
+        }
+    }
+
+    fn skip_output_rules() -> RulesSection {
+        RulesSection {
+            skip_output_matching: true,
+            ..RulesSection::default()
+        }
+    }
+
     #[test]
     fn verify_status_serializes_lowercase() {
         let pass = serde_json::to_string(&VerifyStatus::Pass).unwrap();
+        let warn = serde_json::to_string(&VerifyStatus::Warn).unwrap();
         let fail = serde_json::to_string(&VerifyStatus::Fail).unwrap();
         let timeout = serde_json::to_string(&VerifyStatus::Timeout).unwrap();
         let skipped = serde_json::to_string(&VerifyStatus::Skipped).unwrap();
 
         assert_eq!(pass, "\"pass\"");
+        assert_eq!(warn, "\"warn\"");
         assert_eq!(fail, "\"fail\"");
         assert_eq!(timeout, "\"timeout\"");
         assert_eq!(skipped, "\"skipped\"");
@@ -603,6 +795,7 @@ Example here.
             stdout: None,
             stderr: None,
             duration_ms: Some(10),
+            output_mismatch: None,
         });
         assert!(doc_result.is_success());
 
@@ -614,6 +807,7 @@ Example here.
             stdout: None,
             stderr: None,
             duration_ms: Some(5),
+            output_mismatch: None,
         });
         assert!(!doc_result.is_success());
     }
@@ -637,6 +831,7 @@ Example here.
             stdout: None,
             stderr: None,
             duration_ms: Some(10),
+            output_mismatch: None,
         });
 
         doc_result.add_result(CommandResult {
@@ -647,6 +842,7 @@ Example here.
             stdout: None,
             stderr: None,
             duration_ms: Some(5),
+            output_mismatch: None,
         });
 
         results.add_document(doc_result);
@@ -668,7 +864,12 @@ Example here.
             timeout_secs: Some(30),
         };
 
-        let result = run_command(&item, Duration::from_secs(30), Path::new("."));
+        let result = run_command(
+            &item,
+            Duration::from_secs(30),
+            Path::new("."),
+            &default_rules(),
+        );
 
         assert_eq!(result.status, VerifyStatus::Pass);
         assert_eq!(result.exit_code, Some(0));
@@ -690,7 +891,12 @@ Example here.
             timeout_secs: Some(30),
         };
 
-        let result = run_command(&item, Duration::from_secs(30), Path::new("."));
+        let result = run_command(
+            &item,
+            Duration::from_secs(30),
+            Path::new("."),
+            &default_rules(),
+        );
 
         assert_eq!(result.status, VerifyStatus::Fail);
         assert_eq!(result.exit_code, Some(1));
@@ -707,7 +913,12 @@ Example here.
             timeout_secs: Some(30),
         };
 
-        let result = run_command(&item, Duration::from_secs(30), Path::new("."));
+        let result = run_command(
+            &item,
+            Duration::from_secs(30),
+            Path::new("."),
+            &default_rules(),
+        );
 
         assert_eq!(result.status, VerifyStatus::Pass);
         assert_eq!(result.exit_code, Some(1));
@@ -731,6 +942,7 @@ Example here.
             stdout: Some("ok\n".to_string()),
             stderr: None,
             duration_ms: Some(10),
+            output_mismatch: None,
         });
         results.add_document(doc_result);
 
@@ -767,8 +979,14 @@ Example here.
         let doc = ParsedDoc::parse(&doc_path).unwrap();
         let spec = extract_verification_spec(&doc).unwrap();
 
-        let doc_result =
-            run_verification(&spec, Duration::from_secs(30), true, temp_dir.path()).unwrap();
+        let doc_result = run_verification(
+            &spec,
+            Duration::from_secs(30),
+            true,
+            temp_dir.path(),
+            &default_rules(),
+        )
+        .unwrap();
 
         assert!(doc_result.is_success());
         assert_eq!(doc_result.commands.len(), 2);
@@ -790,8 +1008,14 @@ Example here.
         let doc = ParsedDoc::parse(&doc_path).unwrap();
         let spec = extract_verification_spec(&doc).unwrap();
 
-        let doc_result =
-            run_verification(&spec, Duration::from_secs(30), true, temp_dir.path()).unwrap();
+        let doc_result = run_verification(
+            &spec,
+            Duration::from_secs(30),
+            true,
+            temp_dir.path(),
+            &default_rules(),
+        )
+        .unwrap();
 
         assert!(!doc_result.is_success());
         assert_eq!(doc_result.commands[0].status, VerifyStatus::Pass);
@@ -811,8 +1035,14 @@ Example here.
         let doc = ParsedDoc::parse(&doc_path).unwrap();
         let spec = extract_verification_spec(&doc).unwrap();
 
-        let doc_result =
-            run_verification(&spec, Duration::from_secs(30), false, temp_dir.path()).unwrap();
+        let doc_result = run_verification(
+            &spec,
+            Duration::from_secs(30),
+            false,
+            temp_dir.path(),
+            &default_rules(),
+        )
+        .unwrap();
 
         assert!(!doc_result.is_success());
         assert_eq!(doc_result.commands.len(), 2);
@@ -833,13 +1063,182 @@ Example here.
         let doc = ParsedDoc::parse(&doc_path).unwrap();
         let spec = extract_verification_spec(&doc).unwrap();
 
-        let doc_result =
-            run_verification(&spec, Duration::from_secs(30), true, temp_dir.path()).unwrap();
+        let doc_result = run_verification(
+            &spec,
+            Duration::from_secs(30),
+            true,
+            temp_dir.path(),
+            &default_rules(),
+        )
+        .unwrap();
 
         assert!(!doc_result.is_success());
         assert_eq!(doc_result.commands.len(), 3);
         assert_eq!(doc_result.commands[0].status, VerifyStatus::Fail);
         assert_eq!(doc_result.commands[1].status, VerifyStatus::Pass);
         assert_eq!(doc_result.commands[2].status, VerifyStatus::Pass);
+    }
+
+    #[test]
+    fn output_mismatch_produces_warning_by_default() {
+        let item = VerificationItem {
+            command: "echo actual".to_string(),
+            working_dir: None,
+            expected_exit_code: Some(0),
+            expected_output: Some(OutputMatcher::Contains("expected".to_string())),
+            timeout_secs: Some(30),
+        };
+
+        let result = run_command(
+            &item,
+            Duration::from_secs(30),
+            Path::new("."),
+            &default_rules(),
+        );
+
+        assert_eq!(result.status, VerifyStatus::Warn);
+        assert!(result.output_mismatch.is_some());
+        let mismatch = result.output_mismatch.unwrap();
+        assert_eq!(mismatch.strategy, "contains");
+        assert_eq!(mismatch.expected, "expected");
+        assert!(mismatch.actual.contains("actual"));
+    }
+
+    #[test]
+    fn output_mismatch_fails_with_strict_mode() {
+        let item = VerificationItem {
+            command: "echo actual".to_string(),
+            working_dir: None,
+            expected_exit_code: Some(0),
+            expected_output: Some(OutputMatcher::Contains("expected".to_string())),
+            timeout_secs: Some(30),
+        };
+
+        let result = run_command(
+            &item,
+            Duration::from_secs(30),
+            Path::new("."),
+            &strict_rules(),
+        );
+
+        assert_eq!(result.status, VerifyStatus::Fail);
+        assert!(result.output_mismatch.is_some());
+    }
+
+    #[test]
+    fn output_mismatch_ignored_with_skip_mode() {
+        let item = VerificationItem {
+            command: "echo actual".to_string(),
+            working_dir: None,
+            expected_exit_code: Some(0),
+            expected_output: Some(OutputMatcher::Contains("expected".to_string())),
+            timeout_secs: Some(30),
+        };
+
+        let result = run_command(
+            &item,
+            Duration::from_secs(30),
+            Path::new("."),
+            &skip_output_rules(),
+        );
+
+        assert_eq!(result.status, VerifyStatus::Pass);
+        assert!(result.output_mismatch.is_none());
+    }
+
+    #[test]
+    fn output_match_passes() {
+        let item = VerificationItem {
+            command: "echo hello world".to_string(),
+            working_dir: None,
+            expected_exit_code: Some(0),
+            expected_output: Some(OutputMatcher::Contains("hello".to_string())),
+            timeout_secs: Some(30),
+        };
+
+        let result = run_command(
+            &item,
+            Duration::from_secs(30),
+            Path::new("."),
+            &default_rules(),
+        );
+
+        assert_eq!(result.status, VerifyStatus::Pass);
+        assert!(result.output_mismatch.is_none());
+    }
+
+    #[test]
+    fn warn_status_is_success() {
+        let spec = VerificationSpec {
+            source_file: PathBuf::from("test.md"),
+            section_line: 10,
+            items: vec![],
+        };
+
+        let mut doc_result = DocumentResult::new(&spec);
+        doc_result.add_result(CommandResult {
+            command: "echo ok".to_string(),
+            status: VerifyStatus::Warn,
+            exit_code: Some(0),
+            expected_exit_code: 0,
+            stdout: Some("actual".to_string()),
+            stderr: None,
+            duration_ms: Some(10),
+            output_mismatch: Some(OutputMismatch {
+                expected: "expected".to_string(),
+                strategy: "contains".to_string(),
+                actual: "actual".to_string(),
+            }),
+        });
+
+        // Warn is still considered success
+        assert!(doc_result.is_success());
+        // Verify the document status is Warn
+        assert_eq!(doc_result.status, VerifyStatus::Warn);
+    }
+
+    #[test]
+    fn verify_results_tracks_warnings() {
+        let spec = VerificationSpec {
+            source_file: PathBuf::from("test.md"),
+            section_line: 10,
+            items: vec![],
+        };
+
+        let mut results = VerifyResults::new();
+        let mut doc_result = DocumentResult::new(&spec);
+
+        doc_result.add_result(CommandResult {
+            command: "echo 1".to_string(),
+            status: VerifyStatus::Pass,
+            exit_code: Some(0),
+            expected_exit_code: 0,
+            stdout: None,
+            stderr: None,
+            duration_ms: Some(10),
+            output_mismatch: None,
+        });
+
+        doc_result.add_result(CommandResult {
+            command: "echo 2".to_string(),
+            status: VerifyStatus::Warn,
+            exit_code: Some(0),
+            expected_exit_code: 0,
+            stdout: Some("actual".to_string()),
+            stderr: None,
+            duration_ms: Some(5),
+            output_mismatch: Some(OutputMismatch {
+                expected: "expected".to_string(),
+                strategy: "contains".to_string(),
+                actual: "actual".to_string(),
+            }),
+        });
+
+        results.add_document(doc_result);
+
+        assert_eq!(results.commands_passed, 1);
+        assert_eq!(results.commands_warned, 1);
+        assert_eq!(results.commands_failed, 0);
+        assert!(results.is_success());
     }
 }

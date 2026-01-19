@@ -65,9 +65,13 @@ pub struct RulesSection {
     #[serde(default = "default_true")]
     pub require_verification_commands: bool,
     /// When true, verification fails if output doesn't match expected patterns.
-    /// When false (default), output matching is advisory only.
+    /// When false (default), output mismatches produce warnings.
     #[serde(default)]
     pub strict_output_matching: bool,
+    /// When true, output matching is completely disabled (no warnings or failures).
+    /// When false (default), output is checked and mismatches produce warnings or failures.
+    #[serde(default)]
+    pub skip_output_matching: bool,
     /// Enable document-type-specific validation rules.
     /// When enabled, documents are validated against type-specific requirements.
     #[serde(default)]
@@ -151,6 +155,7 @@ impl Default for RulesSection {
             require_examples: true,
             require_verification_commands: true,
             strict_output_matching: false,
+            skip_output_matching: false,
             type_specific: TypeSpecificRulesSection::default(),
         }
     }
@@ -505,5 +510,34 @@ root = "docs"
         let serialized = toml::to_string_pretty(&config).unwrap();
         let deserialized = PaverConfig::parse(&serialized).unwrap();
         assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn parse_config_with_skip_output_matching() {
+        let toml = r#"
+[paver]
+version = "0.1"
+
+[docs]
+root = "docs"
+
+[rules]
+skip_output_matching = true
+"#;
+        let config = PaverConfig::parse(toml).unwrap();
+        assert!(config.rules.skip_output_matching);
+    }
+
+    #[test]
+    fn default_skip_output_matching_is_false() {
+        let toml = r#"
+[paver]
+version = "0.1"
+
+[docs]
+root = "docs"
+"#;
+        let config = PaverConfig::parse(toml).unwrap();
+        assert!(!config.rules.skip_output_matching);
     }
 }

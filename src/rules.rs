@@ -549,6 +549,7 @@ Missing verification.
             require_examples: false,
             require_verification_commands: true,
             strict_output_matching: false,
+            skip_output_matching: false,
             type_specific: Default::default(),
         };
         let engine = RulesEngine::from_config(&config);
@@ -584,6 +585,8 @@ Missing verification.
             require_examples: false,
             require_verification_commands: false,
             strict_output_matching: false,
+            skip_output_matching: false,
+            type_specific: Default::default(),
         };
         let engine = RulesEngine::from_config(&config);
 
