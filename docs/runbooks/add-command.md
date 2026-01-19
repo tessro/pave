@@ -139,18 +139,19 @@ git checkout -- src/main.rs src/cli.rs src/commands/
 After completing all steps, verify success with:
 
 ```bash
-# Run the full test suite
 cargo test
+```
 
-# Validate PAVED documentation
-paver check
+Validate PAVED documentation:
 
-# Verify help text appears correctly
+```bash
+./target/release/paver check
+```
+
+Verify help text appears correctly:
+
+```bash
 ./target/debug/paver --help
-./target/debug/paver <newcmd> --help
-
-# Test basic command execution
-./target/debug/paver <newcmd> <expected-args>
 ```
 
 ## Examples

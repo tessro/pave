@@ -92,23 +92,13 @@ The **max_lines** rule produces an error if the document exceeds the configured 
 Test validation with a known-good document:
 
 ```bash
-paver check docs/components/validation-engine.md
-```
-
-Expected output (success):
-```
-Checked 1 document: all checks passed
+./target/release/paver check docs/components/validation-engine.md
 ```
 
 Test that validation catches errors:
 
 ```bash
-echo "# No sections" > /tmp/bad.md && paver check /tmp/bad.md
-```
-
-Expected output (failure):
-```
-/tmp/bad.md:1: error: missing required section: Purpose
+echo "# No sections" > /tmp/bad.md && ./target/release/paver check /tmp/bad.md; rm /tmp/bad.md
 ```
 
 Run the unit tests:

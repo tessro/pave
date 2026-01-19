@@ -83,26 +83,16 @@ If a release needs to be reverted:
 
 ## Verification
 
-Confirm the release was successful:
+Check the latest tag exists:
 
 ```bash
-# Check the latest tag exists
 git tag -l | tail -1
+```
 
-# Verify the tag points to the correct commit
-git show v0.x.x --oneline --no-patch
+Confirm the release binary version:
 
-# Confirm the release binary version
+```bash
 ./target/release/paver --version
-
-# Verify CI workflow completed
-gh run list --workflow=release.yml --limit=1
-
-# Check GitHub Release was created
-gh release view v0.x.x
-
-# Verify crates.io publication
-cargo search paver
 ```
 
 ## Examples

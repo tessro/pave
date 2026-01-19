@@ -74,22 +74,19 @@ require_examples = true
 Validate documents pass PAVED requirements:
 
 ```bash
-# Check all docs
-paver check
-
-# Check specific file
-paver check docs/manifesto.md
-
-# Check with strict mode (warnings become errors)
-paver check --strict
-
-# JSON output for CI integration
-paver check --format json
+./target/release/paver check
 ```
 
-Expected output for a valid document:
+Check a specific file:
+
+```bash
+./target/release/paver check docs/manifesto.md
 ```
-Checked 1 document: all checks passed
+
+Check with strict mode (warnings become errors):
+
+```bash
+./target/release/paver check --strict
 ```
 
 Common validation errors:

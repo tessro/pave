@@ -134,20 +134,22 @@ require_examples = true
 
 ## Verification
 
-Confirm paver is installed and working:
+Confirm paver is built and working:
 
 ```bash
-# Check version
-paver --version
-# Expected: paver 0.1.0
+cargo build --release && ./target/release/paver --version
+```
 
-# Validate documentation
-paver check docs/
-# Expected: Lists validation results, exits 0 if all pass
+Validate documentation:
 
-# Show configuration
-paver config list
-# Expected: Displays current configuration values
+```bash
+./target/release/paver check docs/
+```
+
+Show configuration:
+
+```bash
+./target/release/paver config list
 ```
 
 ## Examples

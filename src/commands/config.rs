@@ -31,8 +31,7 @@ fn find_config_path_from(start: &Path) -> Result<PathBuf> {
 fn load_config(path: &Path) -> Result<Value> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-    let value: Value = content
-        .parse()
+    let value: Value = toml::from_str(&content)
         .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
     Ok(value)
 }

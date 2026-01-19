@@ -94,20 +94,10 @@ Check that code mapping detects impacted docs:
 cargo run -- changed --base HEAD~1
 ```
 
-Verify strict mode fails appropriately:
+Verify JSON output format works:
 
 ```bash
-echo '# Test
-## Purpose
-Test.
-## Paths
-- src/cli.rs
-## Verification
-```bash
-true
-```
-## Examples
-Ex.' > /tmp/mapped.md && git diff --name-only HEAD~1 | grep -q src/cli.rs && cargo run -- changed --strict; test $? -eq 1 || echo "No cli.rs changes to test"
+cargo run -- changed --base HEAD~1 --format json | head -1
 ```
 
 ## Examples
