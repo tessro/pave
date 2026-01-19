@@ -386,6 +386,7 @@ mod tests {
             max_lines: 500,
             require_verification: false,
             require_examples: true,
+            require_verification_commands: true,
             strict_output_matching: false,
         };
 

@@ -60,6 +60,10 @@ pub struct RulesSection {
     /// Require Examples section in documents.
     #[serde(default = "default_true")]
     pub require_examples: bool,
+    /// Require executable commands in Verification sections.
+    /// Defaults to true when require_verification is true.
+    #[serde(default = "default_true")]
+    pub require_verification_commands: bool,
     /// When true, verification fails if output doesn't match expected patterns.
     /// When false (default), output matching is advisory only.
     #[serde(default)]
@@ -127,6 +131,7 @@ impl Default for RulesSection {
             max_lines: default_max_lines(),
             require_verification: true,
             require_examples: true,
+            require_verification_commands: true,
             strict_output_matching: false,
         }
     }

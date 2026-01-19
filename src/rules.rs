@@ -119,6 +119,12 @@ impl RulesEngine {
             rules.push(Rule::RequireSection {
                 name: "Verification".to_string(),
             });
+            // Require executable commands in Verification section
+            if config.require_verification_commands {
+                rules.push(Rule::RequireCommand {
+                    in_section: "Verification".to_string(),
+                });
+            }
         }
 
         // Require Examples section if enabled
@@ -371,12 +377,13 @@ Missing verification.
             max_lines: 500,
             require_verification: true,
             require_examples: false,
+            require_verification_commands: true,
             strict_output_matching: false,
         };
         let engine = RulesEngine::from_config(&config);
 
-        // Should have: Purpose, Verification, MaxLines (no Examples or RequireCodeBlock)
-        assert_eq!(engine.rules().len(), 3);
+        // Should have: Purpose, Verification, RequireCommand(Verification), MaxLines
+        assert_eq!(engine.rules().len(), 4);
         assert!(
             engine
                 .rules()
@@ -387,11 +394,41 @@ Missing verification.
             r,
             Rule::RequireSection { name } if name == "Verification"
         )));
+        assert!(engine.rules().iter().any(|r| matches!(
+            r,
+            Rule::RequireCommand { in_section } if in_section == "Verification"
+        )));
         // Examples rule should not be present
         assert!(!engine.rules().iter().any(|r| matches!(
             r,
             Rule::RequireSection { name } if name == "Examples"
         )));
+    }
+
+    #[test]
+    fn rules_engine_from_config_without_verification_commands() {
+        let config = RulesSection {
+            max_lines: 300,
+            require_verification: true,
+            require_examples: false,
+            require_verification_commands: false,
+            strict_output_matching: false,
+        };
+        let engine = RulesEngine::from_config(&config);
+
+        // Should have: Purpose, Verification, MaxLines (no RequireCommand)
+        assert_eq!(engine.rules().len(), 3);
+        assert!(engine.rules().iter().any(|r| matches!(
+            r,
+            Rule::RequireSection { name } if name == "Verification"
+        )));
+        // RequireCommand rule should NOT be present
+        assert!(
+            !engine
+                .rules()
+                .iter()
+                .any(|r| matches!(r, Rule::RequireCommand { .. }))
+        );
     }
 
     #[test]
