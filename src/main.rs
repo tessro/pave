@@ -1,6 +1,10 @@
 use anyhow::Result;
 use clap::Parser;
-use paver::cli::{Cli, Command, ConfigCommand, DocType, HooksCommand, PromptOutputFormat};
+use paver::cli::{
+    AdoptOutputFormat, Cli, Command, ConfigCommand, DocType, HooksCommand, PromptOutputFormat,
+};
+use paver::commands::adopt::{self, AdoptArgs};
+use paver::commands::build;
 use paver::commands::changed::{self, ChangedArgs};
 use paver::commands::check::{self, CheckArgs};
 use paver::commands::config;
@@ -8,8 +12,7 @@ use paver::commands::hooks;
 use paver::commands::index;
 use paver::commands::init;
 use paver::commands::new::{self, NewArgs};
-use paver::commands::prompt::{OutputFormat, PromptOptions, generate_prompt};
-use paver::commands::build;
+use paver::commands::prompt::{generate_prompt, OutputFormat, PromptOptions};
 use paver::commands::verify::{self, VerifyArgs};
 use paver::templates::TemplateType;
 
@@ -17,6 +20,22 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Adopt {
+            path,
+            format,
+            suggest_config,
+            dry_run,
+        } => {
+            adopt::execute(AdoptArgs {
+                path,
+                format: match format {
+                    AdoptOutputFormat::Text => adopt::AdoptOutputFormat::Text,
+                    AdoptOutputFormat::Json => adopt::AdoptOutputFormat::Json,
+                },
+                suggest_config,
+                dry_run,
+            })?;
+        }
         Command::Init(args) => {
             init::run(init::InitArgs {
                 docs_root: args.docs_root,

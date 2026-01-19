@@ -33,8 +33,37 @@ pub enum PromptOutputFormat {
     Json,
 }
 
+/// Output format for adopt command.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum AdoptOutputFormat {
+    /// Plain text output.
+    #[default]
+    Text,
+    /// JSON output for programmatic use.
+    Json,
+}
+
 #[derive(Subcommand)]
 pub enum Command {
+    /// Scan existing documentation to help onboard paver
+    Adopt {
+        /// Path to scan for documentation [default: auto-detect docs/, documentation/, or README.md]
+        #[arg()]
+        path: Option<PathBuf>,
+
+        /// Output format: text, json
+        #[arg(long, default_value = "text", value_enum)]
+        format: AdoptOutputFormat,
+
+        /// Print suggested .paver.toml settings
+        #[arg(long)]
+        suggest_config: bool,
+
+        /// Show what paver init would create (without creating)
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Initialize a project with PAVED documentation
     Init(InitArgs),
 
