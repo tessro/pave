@@ -184,12 +184,6 @@ Confirm validation runs:
 ./target/release/paver check
 ```
 
-Confirm hooks are installed:
-
-```bash
-ls -la .git/hooks/pre-commit
-```
-
 ## Escalation
 
 If issues arise during onboarding:
